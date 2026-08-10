@@ -15,6 +15,17 @@ st.set_page_config(
 CANVAS_PADDING = 40
 CANVAS_MAX_PX = 680
 
+# 関東間（1畳 182cm×91cm）を基準にした一般的な目安（幅 × 奥行 × 高さ cm）
+ROOM_PRESETS = {
+    "4.5畳（約 273 × 273 cm）": (273, 273, 240),
+    "6畳（約 364 × 273 cm）": (364, 273, 240),
+    "7畳（約 364 × 318 cm）": (364, 318, 240),
+    "8畳（約 364 × 364 cm）": (364, 364, 240),
+    "10畳（約 455 × 364 cm）": (455, 364, 240),
+    "12畳（約 546 × 455 cm）": (546, 455, 240),
+}
+PRESET_OPTIONS = list(ROOM_PRESETS.keys()) + ["自分で入力（cm）"]
+
 # ── 家具メッシュ生成（単位: cm） ───────────────────────────────
 
 
@@ -329,9 +340,11 @@ def init_session_state():
     if "placed_furniture" not in st.session_state:
         st.session_state.placed_furniture = []
     if "room_size" not in st.session_state:
-        st.session_state.room_size = (400, 350, 240)
+        st.session_state.room_size = ROOM_PRESETS["6畳（約 364 × 273 cm）"]
     elif st.session_state.room_size[0] < 50:
         st.session_state.room_size = tuple(v * 100 for v in st.session_state.room_size)
+    if "room_preset" not in st.session_state:
+        st.session_state.room_preset = "6畳（約 364 × 273 cm）"
 
 
 init_session_state()
@@ -343,7 +356,7 @@ st.markdown(
     """
 **このアプリでできること（現在）**
 
-1. 部屋の大きさ（cm）を入力して、簡易的な3D空間を作る
+1. 畳数（6畳・7畳など）を選ぶか、部屋の大きさを入力して3D空間を作る
 2. 間取り図上で家具をタッチして動かし、配置イメージを作る
 3. 「実際の部屋の写真」と「家具配置の3Dイメージ」を並べて共有する
 
@@ -362,31 +375,47 @@ tab_room, tab_layout, tab_share = st.tabs(
 
 with tab_room:
     st.subheader("部屋のサイズ")
-    st.caption("3D空間は、この数値（cm）から作成されます。")
+    st.caption("畳数を選ぶと、一般的なお部屋の大きさが自動で入ります。")
 
-    c1, c2, c3 = st.columns(3)
-    room_width = c1.number_input(
-        "幅 (cm)",
-        min_value=200,
-        max_value=1500,
-        value=int(st.session_state.room_size[0]),
-        step=10,
+    preset_index = PRESET_OPTIONS.index(st.session_state.room_preset)
+    selected_preset = st.selectbox(
+        "部屋の広さ",
+        PRESET_OPTIONS,
+        index=preset_index,
+        help="目安のサイズです。実際の部屋と違う場合は「自分で入力（cm）」を選んでください。",
     )
-    room_depth = c2.number_input(
-        "奥行 (cm)",
-        min_value=200,
-        max_value=1500,
-        value=int(st.session_state.room_size[1]),
-        step=10,
-    )
-    room_height = c3.number_input(
-        "高さ (cm)",
-        min_value=200,
-        max_value=400,
-        value=int(st.session_state.room_size[2]),
-        step=5,
-    )
-    st.session_state.room_size = (room_width, room_depth, room_height)
+
+    if selected_preset != st.session_state.room_preset:
+        st.session_state.room_preset = selected_preset
+
+    if selected_preset != "自分で入力（cm）":
+        st.session_state.room_size = ROOM_PRESETS[selected_preset]
+        rw, rd, rh = st.session_state.room_size
+        st.info(f"設定中: 幅 {rw} cm × 奥行 {rd} cm × 高さ {rh} cm")
+    else:
+        c1, c2, c3 = st.columns(3)
+        room_width = c1.number_input(
+            "幅 (cm)",
+            min_value=200,
+            max_value=1500,
+            value=int(st.session_state.room_size[0]),
+            step=10,
+        )
+        room_depth = c2.number_input(
+            "奥行 (cm)",
+            min_value=200,
+            max_value=1500,
+            value=int(st.session_state.room_size[1]),
+            step=10,
+        )
+        room_height = c3.number_input(
+            "高さ (cm)",
+            min_value=200,
+            max_value=400,
+            value=int(st.session_state.room_size[2]),
+            step=5,
+        )
+        st.session_state.room_size = (room_width, room_depth, room_height)
 
     st.divider()
     st.subheader("部屋の参考写真（任意）")

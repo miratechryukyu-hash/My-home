@@ -270,9 +270,20 @@ def build_placed_items(placed_furniture):
     return placed_items
 
 
-def clamp_furniture_position(x_cm, y_cm, width_cm, depth_cm, room_width_cm, room_depth_cm):
-    x = max(-room_width_cm / 2 + width_cm / 2, min(room_width_cm / 2 - width_cm / 2, x_cm))
-    y = max(-room_depth_cm / 2 + depth_cm / 2, min(room_depth_cm / 2 - depth_cm / 2, y_cm))
+def furniture_half_extents(width_cm, depth_cm, rotation_deg):
+    angle = np.radians(rotation_deg % 360)
+    cos_a, sin_a = abs(np.cos(angle)), abs(np.sin(angle))
+    half_x = (width_cm * cos_a + depth_cm * sin_a) / 2
+    half_y = (width_cm * sin_a + depth_cm * cos_a) / 2
+    return half_x, half_y
+
+
+def clamp_furniture_position(
+    x_cm, y_cm, width_cm, depth_cm, room_width_cm, room_depth_cm, rotation_deg=0
+):
+    half_x, half_y = furniture_half_extents(width_cm, depth_cm, rotation_deg)
+    x = max(-room_width_cm / 2 + half_x, min(room_width_cm / 2 - half_x, x_cm))
+    y = max(-room_depth_cm / 2 + half_y, min(room_depth_cm / 2 - half_y, y_cm))
     return round(x, 1), round(y, 1)
 
 
@@ -381,6 +392,36 @@ def move_selected_furniture(dx_cm, dy_cm, room_width_cm, room_depth_cm):
         item["depth_cm"],
         room_width_cm,
         room_depth_cm,
+        item["rotation"],
+    )
+    st.session_state.placed_furniture[idx]["position"] = [x, y, 0]
+
+
+def snap_selected_furniture_to_wall(wall, room_width_cm, room_depth_cm):
+    idx = get_selected_furniture_index()
+    item = normalize_furniture_item(st.session_state.placed_furniture[idx])
+    half_x, half_y = furniture_half_extents(
+        item["width_cm"], item["depth_cm"], item["rotation"]
+    )
+    x, y = item["position"][0], item["position"][1]
+
+    if wall == "back":
+        y = room_depth_cm / 2 - half_y
+    elif wall == "front":
+        y = -room_depth_cm / 2 + half_y
+    elif wall == "left":
+        x = -room_width_cm / 2 + half_x
+    elif wall == "right":
+        x = room_width_cm / 2 - half_x
+
+    x, y = clamp_furniture_position(
+        x,
+        y,
+        item["width_cm"],
+        item["depth_cm"],
+        room_width_cm,
+        room_depth_cm,
+        item["rotation"],
     )
     st.session_state.placed_furniture[idx]["position"] = [x, y, 0]
 
@@ -726,6 +767,7 @@ with tab_layout:
                 item["depth_cm"],
                 rw,
                 rd,
+                item["rotation"],
             )
             st.session_state.placed_furniture[idx]["position"] = [x, y, 0]
             st.rerun()
@@ -747,10 +789,36 @@ with tab_layout:
         if n5.button("90°回転", use_container_width=True):
             idx = get_selected_furniture_index()
             item = normalize_furniture_item(st.session_state.placed_furniture[idx])
+            new_rotation = (item["rotation"] + 90) % 360
+            x, y = clamp_furniture_position(
+                item["position"][0],
+                item["position"][1],
+                item["width_cm"],
+                item["depth_cm"],
+                rw,
+                rd,
+                new_rotation,
+            )
             st.session_state.placed_furniture[idx] = {
                 **item,
-                "rotation": (item["rotation"] + 90) % 360,
+                "rotation": new_rotation,
+                "position": [x, y, 0],
             }
+            st.rerun()
+
+        st.markdown("**壁ぎりぎりに配置**")
+        s1, s2, s3, s4 = st.columns(4)
+        if s1.button("奥ぎりぎり", use_container_width=True):
+            snap_selected_furniture_to_wall("back", rw, rd)
+            st.rerun()
+        if s2.button("手前ぎりぎり", use_container_width=True):
+            snap_selected_furniture_to_wall("front", rw, rd)
+            st.rerun()
+        if s3.button("左ぎりぎり", use_container_width=True):
+            snap_selected_furniture_to_wall("left", rw, rd)
+            st.rerun()
+        if s4.button("右ぎりぎり", use_container_width=True):
+            snap_selected_furniture_to_wall("right", rw, rd)
             st.rerun()
     else:
         st.info("家具を追加すると、ここに間取り図が表示されます。")

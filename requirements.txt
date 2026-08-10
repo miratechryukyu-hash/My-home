@@ -2,3 +2,4 @@ streamlit
 plotly
 trimesh
 kaleido
+streamlit-drawable-canvas

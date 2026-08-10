@@ -1,7 +1,10 @@
+import json
+
 import numpy as np
 import plotly.graph_objects as go
 import streamlit as st
 import trimesh
+from streamlit_drawable_canvas import st_canvas
 
 st.set_page_config(
     page_title="自宅レイアウトイメージ",
@@ -9,7 +12,10 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-# ── 家具メッシュ生成 ──────────────────────────────────────────
+CANVAS_PADDING = 40
+CANVAS_MAX_PX = 680
+
+# ── 家具メッシュ生成（単位: cm） ───────────────────────────────
 
 
 def _box(extents, color="lightgray"):
@@ -17,80 +23,93 @@ def _box(extents, color="lightgray"):
 
 
 def create_bunk_bed():
-    """簡易的な2段ベッド（ボックス組み合わせ）"""
     parts = []
-    bed_w, bed_d, bed_h = 1.0, 2.0, 0.35
-    gap = 0.9
+    bed_w, bed_d, bed_h = 100, 200, 35
+    gap = 90
 
-    for level, z in enumerate([bed_h / 2, bed_h / 2 + gap]):
+    for z in [bed_h / 2, bed_h / 2 + gap]:
         mattress = _box([bed_w, bed_d, bed_h])
         mattress.apply_translation([0, 0, z])
         parts.append(mattress)
 
-        leg_positions = [
-            (-bed_w / 2 + 0.05, -bed_d / 2 + 0.05, z - bed_h / 2),
-            (bed_w / 2 - 0.05, -bed_d / 2 + 0.05, z - bed_h / 2),
-            (-bed_w / 2 + 0.05, bed_d / 2 - 0.05, z - bed_h / 2),
-            (bed_w / 2 - 0.05, bed_d / 2 - 0.05, z - bed_h / 2),
-        ]
-        for pos in leg_positions:
-            leg = _box([0.08, 0.08, z])
-            leg.apply_translation(pos)
+        for dx, dy in [
+            (-bed_w / 2 + 5, -bed_d / 2 + 5),
+            (bed_w / 2 - 5, -bed_d / 2 + 5),
+            (-bed_w / 2 + 5, bed_d / 2 - 5),
+            (bed_w / 2 - 5, bed_d / 2 - 5),
+        ]:
+            leg = _box([8, 8, z])
+            leg.apply_translation([dx, dy, z / 2])
             parts.append(leg)
 
-    ladder = _box([0.08, 0.08, gap + bed_h])
-    ladder.apply_translation([bed_w / 2 + 0.1, 0, (gap + bed_h) / 2])
+    ladder = _box([8, 8, gap + bed_h])
+    ladder.apply_translation([bed_w / 2 + 10, 0, (gap + bed_h) / 2])
     parts.append(ladder)
 
     return trimesh.util.concatenate(parts)
 
 
 def create_single_bed():
-    bed_w, bed_d, bed_h = 1.0, 2.0, 0.35
+    bed_w, bed_d, bed_h = 100, 200, 35
     mattress = _box([bed_w, bed_d, bed_h])
     mattress.apply_translation([0, 0, bed_h / 2])
     return mattress
 
 
 def create_desk():
-    top = _box([1.2, 0.6, 0.04])
-    top.apply_translation([0, 0, 0.74])
-    leg_h = 0.72
+    top = _box([120, 60, 4])
+    top.apply_translation([0, 0, 74])
+    leg_h = 72
     legs = []
-    for x, y in [(-0.55, -0.25), (0.55, -0.25), (-0.55, 0.25), (0.55, 0.25)]:
-        leg = _box([0.06, 0.06, leg_h])
+    for x, y in [(-55, -25), (55, -25), (-55, 25), (55, 25)]:
+        leg = _box([6, 6, leg_h])
         leg.apply_translation([x, y, leg_h / 2])
         legs.append(leg)
     return trimesh.util.concatenate([top, *legs])
 
 
 def create_sofa():
-    seat = _box([1.8, 0.8, 0.4])
-    seat.apply_translation([0, 0, 0.2])
-    back = _box([1.8, 0.15, 0.7])
-    back.apply_translation([0, -0.325, 0.55])
+    seat = _box([180, 80, 40])
+    seat.apply_translation([0, 0, 20])
+    back = _box([180, 15, 70])
+    back.apply_translation([0, -32.5, 55])
     return trimesh.util.concatenate([seat, back])
 
 
 FURNITURE_CATALOG = {
-    "2段ベッド": {"factory": create_bunk_bed, "color": "#8B7355"},
-    "シングルベッド": {"factory": create_single_bed, "color": "#A0826D"},
-    "デスク": {"factory": create_desk, "color": "#C4A882"},
-    "ソファ": {"factory": create_sofa, "color": "#6B8E9B"},
+    "2段ベッド": {
+        "factory": create_bunk_bed,
+        "color": "#8B7355",
+        "footprint_cm": (100, 200),
+    },
+    "シングルベッド": {
+        "factory": create_single_bed,
+        "color": "#A0826D",
+        "footprint_cm": (100, 200),
+    },
+    "デスク": {
+        "factory": create_desk,
+        "color": "#C4A882",
+        "footprint_cm": (120, 60),
+    },
+    "ソファ": {
+        "factory": create_sofa,
+        "color": "#6B8E9B",
+        "footprint_cm": (180, 80),
+    },
 }
 
 
-def create_room(width, depth, height):
-    """部屋をワイヤーフレーム風の薄いボックスで表現"""
-    floor = _box([width, depth, 0.02])
-    floor.apply_translation([0, 0, 0.01])
+def create_room(width_cm, depth_cm, height_cm):
+    floor = _box([width_cm, depth_cm, 2])
+    floor.apply_translation([0, 0, 1])
     parts = [floor]
 
     wall_specs = [
-        ([0.02, depth, height], [-width / 2 + 0.01, 0, height / 2]),
-        ([0.02, depth, height], [width / 2 - 0.01, 0, height / 2]),
-        ([width, 0.02, height], [0, -depth / 2 + 0.01, height / 2]),
-        ([width, 0.02, height], [0, depth / 2 - 0.01, height / 2]),
+        ([2, depth_cm, height_cm], [-width_cm / 2 + 1, 0, height_cm / 2]),
+        ([2, depth_cm, height_cm], [width_cm / 2 - 1, 0, height_cm / 2]),
+        ([width_cm, 2, height_cm], [0, -depth_cm / 2 + 1, height_cm / 2]),
+        ([width_cm, 2, height_cm], [0, depth_cm / 2 - 1, height_cm / 2]),
     ]
     for extents, pos in wall_specs:
         wall = _box(extents)
@@ -100,16 +119,16 @@ def create_room(width, depth, height):
     return trimesh.util.concatenate(parts)
 
 
-def apply_transform(mesh, position, rotation_y_deg, scale):
+def apply_transform(mesh, position_cm, rotation_deg, scale):
     m = mesh.copy()
     if scale != 1.0:
         m.apply_scale(scale)
-    if rotation_y_deg:
+    if rotation_deg:
         rot = trimesh.transformations.rotation_matrix(
-            np.radians(rotation_y_deg), [0, 0, 1]
+            np.radians(rotation_deg), [0, 0, 1]
         )
         m.apply_transform(rot)
-    m.apply_translation(position)
+    m.apply_translation(position_cm)
     return m
 
 
@@ -128,10 +147,8 @@ def mesh_to_trace(mesh, color, name, opacity=0.85):
     )
 
 
-def build_scene_figure(room_mesh, placed_items, room_size):
-    traces = [
-        mesh_to_trace(room_mesh, "#E8E4DF", "部屋", opacity=0.35),
-    ]
+def build_scene_figure(room_mesh, placed_items):
+    traces = [mesh_to_trace(room_mesh, "#E8E4DF", "部屋", opacity=0.35)]
     for item in placed_items:
         traces.append(
             mesh_to_trace(item["mesh"], item["color"], item["name"], opacity=0.9)
@@ -142,9 +159,9 @@ def build_scene_figure(room_mesh, placed_items, room_size):
         title="家具配置シミュレーション（3D）",
         scene=dict(
             aspectmode="data",
-            xaxis_title="幅 (m)",
-            yaxis_title="奥行 (m)",
-            zaxis_title="高さ (m)",
+            xaxis_title="幅 (cm)",
+            yaxis_title="奥行 (cm)",
+            zaxis_title="高さ (cm)",
             camera=dict(eye=dict(x=1.6, y=-1.8, z=1.2)),
         ),
         margin=dict(l=0, r=0, b=0, t=40),
@@ -153,13 +170,160 @@ def build_scene_figure(room_mesh, placed_items, room_size):
     return fig
 
 
+def build_placed_items(placed_furniture):
+    placed_items = []
+    for cfg in placed_furniture:
+        catalog = FURNITURE_CATALOG[cfg["name"]]
+        mesh = apply_transform(
+            catalog["factory"](),
+            cfg["position"],
+            cfg["rotation"],
+            cfg["scale"],
+        )
+        placed_items.append(
+            {"mesh": mesh, "color": catalog["color"], "name": cfg["name"]}
+        )
+    return placed_items
+
+
+def canvas_scale(room_width_cm, room_depth_cm):
+    px_per_cm = (CANVAS_MAX_PX - 2 * CANVAS_PADDING) / max(room_width_cm, room_depth_cm)
+    canvas_w = int(room_width_cm * px_per_cm + 2 * CANVAS_PADDING)
+    canvas_h = int(room_depth_cm * px_per_cm + 2 * CANVAS_PADDING)
+    return px_per_cm, canvas_w, canvas_h
+
+
+def room_cm_to_canvas(position_cm, room_width_cm, room_depth_cm, px_per_cm):
+    x_px = CANVAS_PADDING + (position_cm[0] + room_width_cm / 2) * px_per_cm
+    y_px = CANVAS_PADDING + (room_depth_cm / 2 - position_cm[1]) * px_per_cm
+    return x_px, y_px
+
+
+def canvas_to_room_cm(x_px, y_px, room_width_cm, room_depth_cm, px_per_cm):
+    x_cm = (x_px - CANVAS_PADDING) / px_per_cm - room_width_cm / 2
+    y_cm = room_depth_cm / 2 - (y_px - CANVAS_PADDING) / px_per_cm
+    return x_cm, y_cm
+
+
+def build_canvas_drawing(placed_furniture, room_width_cm, room_depth_cm):
+    px_per_cm, _, _ = canvas_scale(room_width_cm, room_depth_cm)
+    objects = [
+        {
+            "type": "rect",
+            "left": CANVAS_PADDING,
+            "top": CANVAS_PADDING,
+            "width": room_width_cm * px_per_cm,
+            "height": room_depth_cm * px_per_cm,
+            "fill": "#F3F0EB",
+            "stroke": "#666666",
+            "strokeWidth": 2,
+            "selectable": False,
+            "evented": False,
+            "name": "__room__",
+        }
+    ]
+
+    for index, item in enumerate(placed_furniture):
+        catalog = FURNITURE_CATALOG[item["name"]]
+        fw, fd = catalog["footprint_cm"]
+        scale = item["scale"]
+        cx, cy = room_cm_to_canvas(
+            item["position"], room_width_cm, room_depth_cm, px_per_cm
+        )
+        w_px = fw * px_per_cm
+        h_px = fd * px_per_cm
+        objects.append(
+            {
+                "type": "rect",
+                "left": cx - (w_px * scale) / 2,
+                "top": cy - (h_px * scale) / 2,
+                "width": w_px,
+                "height": h_px,
+                "scaleX": scale,
+                "scaleY": scale,
+                "angle": item["rotation"],
+                "fill": catalog["color"],
+                "opacity": 0.88,
+                "stroke": "#333333",
+                "strokeWidth": 2,
+                "name": f"{item['name']}::{index}",
+            }
+        )
+        objects.append(
+            {
+                "type": "textbox",
+                "left": cx - 40,
+                "top": cy - 10,
+                "width": 80,
+                "height": 20,
+                "text": item["name"],
+                "fontSize": 14,
+                "fill": "#222222",
+                "backgroundColor": "rgba(255,255,255,0.75)",
+                "editable": False,
+                "selectable": False,
+                "evented": False,
+                "angle": item["rotation"],
+                "originX": "center",
+                "originY": "center",
+                "name": f"__label__::{index}",
+            }
+        )
+
+    return {"version": "4.4.0", "objects": objects}
+
+
+def parse_canvas_furniture(canvas_json, room_width_cm, room_depth_cm):
+    if not canvas_json:
+        return None
+
+    px_per_cm, _, _ = canvas_scale(room_width_cm, room_depth_cm)
+    parsed = []
+
+    for obj in canvas_json.get("objects", []):
+        if obj.get("type") != "rect" or obj.get("name", "").startswith("__"):
+            continue
+
+        name_part, index_part = obj["name"].rsplit("::", 1)
+        scale_x = float(obj.get("scaleX", 1) or 1)
+        scale_y = float(obj.get("scaleY", 1) or 1)
+        width_px = float(obj["width"]) * scale_x
+        height_px = float(obj["height"]) * scale_y
+        cx = float(obj["left"]) + width_px / 2
+        cy = float(obj["top"]) + height_px / 2
+        x_cm, y_cm = canvas_to_room_cm(cx, cy, room_width_cm, room_depth_cm, px_per_cm)
+
+        parsed.append(
+            {
+                "index": int(index_part),
+                "name": name_part,
+                "position": [round(x_cm, 1), round(y_cm, 1), 0],
+                "rotation": round(float(obj.get("angle", 0) or 0), 1),
+                "scale": round((scale_x + scale_y) / 2, 2),
+            }
+        )
+
+    parsed.sort(key=lambda item: item["index"])
+    return [
+        {
+            "name": item["name"],
+            "position": item["position"],
+            "rotation": item["rotation"],
+            "scale": item["scale"],
+        }
+        for item in parsed
+    ]
+
+
 def init_session_state():
     if "room_photos" not in st.session_state:
         st.session_state.room_photos = []
     if "placed_furniture" not in st.session_state:
         st.session_state.placed_furniture = []
     if "room_size" not in st.session_state:
-        st.session_state.room_size = (4.0, 3.5, 2.4)
+        st.session_state.room_size = (400, 350, 240)
+    elif st.session_state.room_size[0] < 50:
+        st.session_state.room_size = tuple(v * 100 for v in st.session_state.room_size)
 
 
 init_session_state()
@@ -171,15 +335,14 @@ st.markdown(
     """
 **このアプリでできること（現在）**
 
-1. 部屋の大きさを入力して、簡易的な3D空間を作る
-2. サンプル家具（2段ベッドなど）をその空間に配置する
-3. 「実際の部屋の写真」と「家具配置の3Dイメージ」を並べて、家族や業者と共有する
+1. 部屋の大きさ（cm）を入力して、簡易的な3D空間を作る
+2. 間取り図上で家具をタッチして動かし、配置イメージを作る
+3. 「実際の部屋の写真」と「家具配置の3Dイメージ」を並べて共有する
 
 **写真について**
 
-写真を撮っても、今のバージョンでは3D空間は自動生成されません。
-写真は **「今の部屋の様子」** として保存され、共有画面に表示されます。
-3D空間は、下記の **部屋のサイズ入力** から作っています。
+写真は **「今の部屋の様子」** として共有画面に表示されます。
+3D空間は **部屋のサイズ入力** から作っています。
 """
 )
 
@@ -191,30 +354,37 @@ tab_room, tab_layout, tab_share = st.tabs(
 
 with tab_room:
     st.subheader("部屋のサイズ")
-    st.caption("3D空間は、この数値から作成されます。メジャーで測れない場合はおおよそで構いません。")
+    st.caption("3D空間は、この数値（cm）から作成されます。")
 
     c1, c2, c3 = st.columns(3)
     room_width = c1.number_input(
-        "幅 (m)", min_value=2.0, max_value=15.0,
-        value=st.session_state.room_size[0], step=0.5,
+        "幅 (cm)",
+        min_value=200,
+        max_value=1500,
+        value=int(st.session_state.room_size[0]),
+        step=10,
     )
     room_depth = c2.number_input(
-        "奥行 (m)", min_value=2.0, max_value=15.0,
-        value=st.session_state.room_size[1], step=0.5,
+        "奥行 (cm)",
+        min_value=200,
+        max_value=1500,
+        value=int(st.session_state.room_size[1]),
+        step=10,
     )
     room_height = c3.number_input(
-        "高さ (m)", min_value=2.0, max_value=4.0,
-        value=st.session_state.room_size[2], step=0.1,
+        "高さ (cm)",
+        min_value=200,
+        max_value=400,
+        value=int(st.session_state.room_size[2]),
+        step=5,
     )
     st.session_state.room_size = (room_width, room_depth, room_height)
 
     st.divider()
     st.subheader("部屋の参考写真（任意）")
     st.markdown(
-        """
-        共有するときに **「今の部屋」** として一緒に見せるための写真です。
-        3D空間の形には影響しません。撮らなくても、家具配置のシミュレーションは使えます。
-        """
+        "共有するときに **「今の部屋」** として一緒に見せるための写真です。"
+        "3D空間の形には影響しません。"
     )
 
     col_cam, col_upload = st.columns(2)
@@ -261,35 +431,25 @@ with tab_room:
 # ── Tab 2: 家具の配置 ─────────────────────────────────────────
 
 with tab_layout:
-    st.subheader("サンプル家具を部屋に配置")
+    st.subheader("間取り図で家具を配置")
+    st.caption(
+        "家具をタッチしてドラッグすると位置を変更できます。"
+        "選択した状態で角を触るとサイズ変更、上の丸を触ると回転できます。"
+    )
 
     rw, rd, rh = st.session_state.room_size
+    px_per_cm, canvas_w, canvas_h = canvas_scale(rw, rd)
 
-    col_sel, col_ctrl = st.columns([1, 2])
-
-    with col_sel:
-        furniture_name = st.selectbox(
-            "家具を選ぶ",
-            list(FURNITURE_CATALOG.keys()),
-        )
-        st.markdown(f"**選択中:** {furniture_name}")
-
-    with col_ctrl:
-        st.markdown("**位置・向き**")
-        c1, c2, c3, c4 = st.columns(4)
-        pos_x = c1.slider("左右 (m)", -rw / 2 + 0.5, rw / 2 - 0.5, 0.0, 0.1)
-        pos_y = c2.slider("前後 (m)", -rd / 2 + 0.5, rd / 2 - 0.5, 0.0, 0.1)
-        rotation = c3.slider("回転 (°)", 0, 360, 0, 15)
-        scale = c4.slider("サイズ", 0.5, 2.0, 1.0, 0.1)
+    furniture_name = st.selectbox("追加する家具", list(FURNITURE_CATALOG.keys()))
 
     bc1, bc2, bc3 = st.columns(3)
-    if bc1.button("この家具を追加", type="primary", use_container_width=True):
+    if bc1.button("選択した家具を追加", type="primary", use_container_width=True):
         st.session_state.placed_furniture.append(
             {
                 "name": furniture_name,
-                "position": [pos_x, pos_y, 0],
-                "rotation": rotation,
-                "scale": scale,
+                "position": [0, 0, 0],
+                "rotation": 0,
+                "scale": 1.0,
             }
         )
         st.rerun()
@@ -303,14 +463,44 @@ with tab_layout:
         st.session_state.placed_furniture = []
         st.rerun()
 
+    initial_drawing = build_canvas_drawing(st.session_state.placed_furniture, rw, rd)
+    canvas_result = st_canvas(
+        fill_color="rgba(0, 0, 0, 0)",
+        stroke_width=0,
+        background_color="#FFFFFF",
+        update_streamlit=True,
+        height=canvas_h,
+        width=canvas_w,
+        drawing_mode="transform",
+        initial_drawing=initial_drawing,
+        display_toolbar=False,
+        key="floor_plan_canvas",
+    )
+
+    if canvas_result.json_data is not None:
+        parsed = parse_canvas_furniture(canvas_result.json_data, rw, rd)
+        if parsed is not None:
+            serialized_current = json.dumps(st.session_state.placed_furniture, ensure_ascii=False)
+            serialized_parsed = json.dumps(parsed, ensure_ascii=False)
+            if serialized_parsed != serialized_current:
+                st.session_state.placed_furniture = parsed
+
     if st.session_state.placed_furniture:
         st.markdown("**配置済み家具**")
         for i, item in enumerate(st.session_state.placed_furniture, 1):
             st.text(
                 f"{i}. {item['name']} — "
-                f"位置 ({item['position'][0]:.1f}, {item['position'][1]:.1f}), "
-                f"回転 {item['rotation']}°, サイズ {item['scale']:.1f}x"
+                f"位置 ({item['position'][0]:.0f} cm, {item['position'][1]:.0f} cm), "
+                f"向き {item['rotation']:.0f} 度, 倍率 {item['scale']:.1f}"
             )
+    else:
+        st.info("「選択した家具を追加」を押すと、間取り図の中央に家具が表示されます。")
+
+    st.divider()
+    st.subheader("3Dプレビュー")
+    room_mesh = create_room(rw, rd, rh)
+    fig_layout = build_scene_figure(room_mesh, build_placed_items(st.session_state.placed_furniture))
+    st.plotly_chart(fig_layout, use_container_width=True)
 
 # ── Tab 3: プレビューと共有 ───────────────────────────────────
 
@@ -320,22 +510,9 @@ with tab_share:
         "左（または上）が実際の部屋の写真、右（または下）が家具を配置した3Dシミュレーションです。"
     )
 
-    room_mesh = create_room(*st.session_state.room_size)
-
-    placed_items = []
-    for cfg in st.session_state.placed_furniture:
-        catalog = FURNITURE_CATALOG[cfg["name"]]
-        mesh = apply_transform(
-            catalog["factory"](),
-            cfg["position"],
-            cfg["rotation"],
-            cfg["scale"],
-        )
-        placed_items.append(
-            {"mesh": mesh, "color": catalog["color"], "name": cfg["name"]}
-        )
-
-    fig = build_scene_figure(room_mesh, placed_items, st.session_state.room_size)
+    rw, rd, rh = st.session_state.room_size
+    room_mesh = create_room(rw, rd, rh)
+    fig = build_scene_figure(room_mesh, build_placed_items(st.session_state.placed_furniture))
 
     if st.session_state.room_photos:
         col_photo, col_3d = st.columns(2)
@@ -358,7 +535,6 @@ with tab_share:
     st.subheader("イメージを共有")
     st.markdown(
         "3Dシミュレーションを画像として保存し、LINE・メールなどで共有できます。"
-        "参考写真は、端末の写真アプリから別途送るか、画面のスクリーンショットをご利用ください。"
     )
 
     try:
@@ -374,7 +550,6 @@ with tab_share:
     except Exception:
         st.warning(
             "画像の書き出しには kaleido が必要です。"
-            "ターミナルで `pip install kaleido` を実行してください。"
             "それまでは画面上の3Dビューをスクリーンショットで共有できます。"
         )
 

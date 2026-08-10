@@ -91,24 +91,47 @@ FURNITURE_CATALOG = {
     "2段ベッド": {
         "factory": create_bunk_bed,
         "color": "#8B7355",
-        "footprint_cm": (100, 200),
+        "default_cm": {"width": 100, "depth": 200, "height": 220},
     },
     "シングルベッド": {
         "factory": create_single_bed,
         "color": "#A0826D",
-        "footprint_cm": (100, 200),
+        "default_cm": {"width": 100, "depth": 200, "height": 50},
     },
     "デスク": {
         "factory": create_desk,
         "color": "#C4A882",
-        "footprint_cm": (120, 60),
+        "default_cm": {"width": 120, "depth": 60, "height": 75},
     },
     "ソファ": {
         "factory": create_sofa,
         "color": "#6B8E9B",
-        "footprint_cm": (180, 80),
+        "default_cm": {"width": 180, "depth": 80, "height": 85},
     },
 }
+
+
+def normalize_furniture_item(item):
+    catalog = FURNITURE_CATALOG[item["name"]]
+    defaults = catalog["default_cm"]
+    scale = float(item.get("scale", 1.0) or 1.0)
+    return {
+        "name": item["name"],
+        "position": item["position"],
+        "rotation": float(item.get("rotation", 0) or 0),
+        "width_cm": float(item.get("width_cm", defaults["width"] * scale)),
+        "depth_cm": float(item.get("depth_cm", defaults["depth"] * scale)),
+        "height_cm": float(item.get("height_cm", defaults["height"] * scale)),
+    }
+
+
+def furniture_scale_xyz(name, width_cm, depth_cm, height_cm):
+    defaults = FURNITURE_CATALOG[name]["default_cm"]
+    return (
+        width_cm / defaults["width"],
+        depth_cm / defaults["depth"],
+        height_cm / defaults["height"],
+    )
 
 
 def create_room(width_cm, depth_cm, height_cm):
@@ -130,10 +153,11 @@ def create_room(width_cm, depth_cm, height_cm):
     return trimesh.util.concatenate(parts)
 
 
-def apply_transform(mesh, position_cm, rotation_deg, scale):
+def apply_transform(mesh, position_cm, rotation_deg, scale_xyz=(1.0, 1.0, 1.0)):
     m = mesh.copy()
-    if scale != 1.0:
-        m.apply_scale(scale)
+    sx, sy, sz = scale_xyz
+    if sx != 1.0 or sy != 1.0 or sz != 1.0:
+        m.apply_scale([sx, sy, sz])
     if rotation_deg:
         rot = trimesh.transformations.rotation_matrix(
             np.radians(rotation_deg), [0, 0, 1]
@@ -183,13 +207,17 @@ def build_scene_figure(room_mesh, placed_items):
 
 def build_placed_items(placed_furniture):
     placed_items = []
-    for cfg in placed_furniture:
+    for raw in placed_furniture:
+        cfg = normalize_furniture_item(raw)
         catalog = FURNITURE_CATALOG[cfg["name"]]
+        scale_xyz = furniture_scale_xyz(
+            cfg["name"], cfg["width_cm"], cfg["depth_cm"], cfg["height_cm"]
+        )
         mesh = apply_transform(
             catalog["factory"](),
             cfg["position"],
             cfg["rotation"],
-            cfg["scale"],
+            scale_xyz,
         )
         placed_items.append(
             {"mesh": mesh, "color": catalog["color"], "name": cfg["name"]}
@@ -234,10 +262,11 @@ def build_canvas_drawing(placed_furniture, room_width_cm, room_depth_cm):
         }
     ]
 
-    for index, item in enumerate(placed_furniture):
+    for index, raw in enumerate(placed_furniture):
+        item = normalize_furniture_item(raw)
         catalog = FURNITURE_CATALOG[item["name"]]
-        fw, fd = catalog["footprint_cm"]
-        scale = item["scale"]
+        fw = item["width_cm"]
+        fd = item["depth_cm"]
         cx, cy = room_cm_to_canvas(
             item["position"], room_width_cm, room_depth_cm, px_per_cm
         )
@@ -246,12 +275,12 @@ def build_canvas_drawing(placed_furniture, room_width_cm, room_depth_cm):
         objects.append(
             {
                 "type": "rect",
-                "left": cx - (w_px * scale) / 2,
-                "top": cy - (h_px * scale) / 2,
+                "left": cx - w_px / 2,
+                "top": cy - h_px / 2,
                 "width": w_px,
                 "height": h_px,
-                "scaleX": scale,
-                "scaleY": scale,
+                "scaleX": 1,
+                "scaleY": 1,
                 "angle": item["rotation"],
                 "fill": catalog["color"],
                 "opacity": 0.88,
@@ -260,6 +289,7 @@ def build_canvas_drawing(placed_furniture, room_width_cm, room_depth_cm):
                 "name": f"{item['name']}::{index}",
             }
         )
+        label = f"{item['name']}\n{fw:.0f}×{fd:.0f}cm"
         objects.append(
             {
                 "type": "textbox",
@@ -267,7 +297,7 @@ def build_canvas_drawing(placed_furniture, room_width_cm, room_depth_cm):
                 "top": cy - 10,
                 "width": 80,
                 "height": 20,
-                "text": item["name"],
+                "text": label,
                 "fontSize": 14,
                 "fill": "#222222",
                 "backgroundColor": "rgba(255,255,255,0.75)",
@@ -284,7 +314,7 @@ def build_canvas_drawing(placed_furniture, room_width_cm, room_depth_cm):
     return {"version": "4.4.0", "objects": objects}
 
 
-def parse_canvas_furniture(canvas_json, room_width_cm, room_depth_cm):
+def parse_canvas_furniture(canvas_json, room_width_cm, room_depth_cm, current_items=None):
     if not canvas_json:
         return None
 
@@ -301,6 +331,7 @@ def parse_canvas_furniture(canvas_json, room_width_cm, room_depth_cm):
 
         try:
             name_part, index_part = name.rsplit("::", 1)
+            index = int(index_part)
             scale_x = float(obj.get("scaleX", 1) or 1)
             scale_y = float(obj.get("scaleY", 1) or 1)
             width_px = float(obj["width"]) * scale_x
@@ -311,14 +342,23 @@ def parse_canvas_furniture(canvas_json, room_width_cm, room_depth_cm):
             continue
 
         x_cm, y_cm = canvas_to_room_cm(cx, cy, room_width_cm, room_depth_cm, px_per_cm)
+        width_cm = round(width_px / px_per_cm, 1)
+        depth_cm = round(height_px / px_per_cm, 1)
+
+        if current_items and index < len(current_items):
+            height_cm = normalize_furniture_item(current_items[index])["height_cm"]
+        else:
+            height_cm = FURNITURE_CATALOG[name_part]["default_cm"]["height"]
 
         parsed.append(
             {
-                "index": int(index_part),
+                "index": index,
                 "name": name_part,
                 "position": [round(x_cm, 1), round(y_cm, 1), 0],
                 "rotation": round(float(obj.get("angle", 0) or 0), 1),
-                "scale": round((scale_x + scale_y) / 2, 2),
+                "width_cm": width_cm,
+                "depth_cm": depth_cm,
+                "height_cm": height_cm,
             }
         )
 
@@ -328,7 +368,9 @@ def parse_canvas_furniture(canvas_json, room_width_cm, room_depth_cm):
             "name": item["name"],
             "position": item["position"],
             "rotation": item["rotation"],
-            "scale": item["scale"],
+            "width_cm": item["width_cm"],
+            "depth_cm": item["depth_cm"],
+            "height_cm": item["height_cm"],
         }
         for item in parsed
     ]
@@ -357,11 +399,11 @@ def bump_canvas_version():
 
 def sync_canvas_to_session(canvas_json, room_width_cm, room_depth_cm):
     """Canvas の内容を session_state に反映（空データで上書きしない）"""
-    parsed = parse_canvas_furniture(canvas_json, room_width_cm, room_depth_cm)
+    current = [normalize_furniture_item(item) for item in st.session_state.placed_furniture]
+    parsed = parse_canvas_furniture(canvas_json, room_width_cm, room_depth_cm, current)
     if parsed is None:
         return
 
-    current = st.session_state.placed_furniture
     if not parsed and current:
         return
 
@@ -369,7 +411,14 @@ def sync_canvas_to_session(canvas_json, room_width_cm, room_depth_cm):
         st.session_state.placed_furniture = parsed
 
 
+def migrate_placed_furniture():
+    st.session_state.placed_furniture = [
+        normalize_furniture_item(item) for item in st.session_state.placed_furniture
+    ]
+
+
 init_session_state()
+migrate_placed_furniture()
 
 # ── UI ────────────────────────────────────────────────────────
 
@@ -516,6 +565,35 @@ with tab_layout:
         key="furniture_select",
     )
 
+    defaults = FURNITURE_CATALOG[furniture_name]["default_cm"]
+    st.markdown("**家具のサイズ（cm）**")
+    size_c1, size_c2, size_c3 = st.columns(3)
+    add_width_cm = size_c1.number_input(
+        "横（幅）",
+        min_value=30,
+        max_value=400,
+        value=int(defaults["width"]),
+        step=5,
+        key=f"add_furniture_width_{furniture_name}",
+    )
+    add_depth_cm = size_c2.number_input(
+        "縦（奥行）",
+        min_value=30,
+        max_value=400,
+        value=int(defaults["depth"]),
+        step=5,
+        key=f"add_furniture_depth_{furniture_name}",
+    )
+    add_height_cm = size_c3.number_input(
+        "高さ",
+        min_value=30,
+        max_value=300,
+        value=int(defaults["height"]),
+        step=5,
+        key=f"add_furniture_height_{furniture_name}",
+    )
+    st.caption("一般的なサイズが初期値です。実際の商品サイズが分かれば入力してください。")
+
     bc1, bc2, bc3 = st.columns(3)
     if bc1.button("選択した家具を追加", type="primary", use_container_width=True):
         st.session_state.placed_furniture.append(
@@ -523,7 +601,9 @@ with tab_layout:
                 "name": furniture_name,
                 "position": [0, 0, 0],
                 "rotation": 0,
-                "scale": 1.0,
+                "width_cm": float(add_width_cm),
+                "depth_cm": float(add_depth_cm),
+                "height_cm": float(add_height_cm),
             }
         )
         bump_canvas_version()
@@ -559,12 +639,59 @@ with tab_layout:
 
     if st.session_state.placed_furniture:
         st.markdown("**配置済み家具**")
-        for i, item in enumerate(st.session_state.placed_furniture, 1):
+        for i, raw in enumerate(st.session_state.placed_furniture, 1):
+            item = normalize_furniture_item(raw)
             st.text(
                 f"{i}. {item['name']} — "
-                f"位置 ({item['position'][0]:.0f} cm, {item['position'][1]:.0f} cm), "
-                f"向き {item['rotation']:.0f} 度, 倍率 {item['scale']:.1f}"
+                f"サイズ {item['width_cm']:.0f} × {item['depth_cm']:.0f} × {item['height_cm']:.0f} cm, "
+                f"位置 ({item['position'][0]:.0f}, {item['position'][1]:.0f}) cm, "
+                f"向き {item['rotation']:.0f} 度"
             )
+
+        st.markdown("**配置済み家具のサイズ変更**")
+        edit_idx = st.selectbox(
+            "変更する家具",
+            range(len(st.session_state.placed_furniture)),
+            format_func=lambda i: (
+                f"{i + 1}. {st.session_state.placed_furniture[i]['name']}"
+            ),
+            key="edit_furniture_index",
+        )
+        edit_item = normalize_furniture_item(st.session_state.placed_furniture[edit_idx])
+        edit_c1, edit_c2, edit_c3 = st.columns(3)
+        edit_width = edit_c1.number_input(
+            "横（幅）",
+            min_value=30,
+            max_value=400,
+            value=int(edit_item["width_cm"]),
+            step=5,
+            key=f"edit_width_{edit_idx}",
+        )
+        edit_depth = edit_c2.number_input(
+            "縦（奥行）",
+            min_value=30,
+            max_value=400,
+            value=int(edit_item["depth_cm"]),
+            step=5,
+            key=f"edit_depth_{edit_idx}",
+        )
+        edit_height = edit_c3.number_input(
+            "高さ",
+            min_value=30,
+            max_value=300,
+            value=int(edit_item["height_cm"]),
+            step=5,
+            key=f"edit_height_{edit_idx}",
+        )
+        if st.button("この家具のサイズを反映", key="apply_furniture_size"):
+            st.session_state.placed_furniture[edit_idx] = {
+                **edit_item,
+                "width_cm": float(edit_width),
+                "depth_cm": float(edit_depth),
+                "height_cm": float(edit_height),
+            }
+            bump_canvas_version()
+            st.rerun()
     else:
         st.info("「選択した家具を追加」を押すと、間取り図の中央に家具が表示されます。")
 

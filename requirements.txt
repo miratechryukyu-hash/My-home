@@ -2,4 +2,4 @@ streamlit
 plotly
 trimesh
 kaleido
-streamlit-drawable-canvas
+streamlit-plotly-events

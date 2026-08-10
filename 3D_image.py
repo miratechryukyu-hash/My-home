@@ -4,7 +4,7 @@ import numpy as np
 import plotly.graph_objects as go
 import streamlit as st
 import trimesh
-from streamlit_drawable_canvas import st_canvas
+from streamlit_plotly_events import plotly_events
 
 st.set_page_config(
     page_title="自宅レイアウトイメージ",
@@ -253,9 +253,14 @@ def build_placed_items(placed_furniture):
         scale_xyz = furniture_scale_xyz(
             cfg["name"], cfg["width_cm"], cfg["depth_cm"], cfg["height_cm"]
         )
+        position_3d = [
+            cfg["position"][0],
+            cfg["position"][1],
+            cfg["height_cm"] / 2,
+        ]
         mesh = apply_transform(
             catalog["factory"](),
-            cfg["position"],
+            position_3d,
             cfg["rotation"],
             scale_xyz,
         )
@@ -263,6 +268,85 @@ def build_placed_items(placed_furniture):
             {"mesh": mesh, "color": catalog["color"], "name": cfg["name"]}
         )
     return placed_items
+
+
+def clamp_furniture_position(x_cm, y_cm, width_cm, depth_cm, room_width_cm, room_depth_cm):
+    x = max(-room_width_cm / 2 + width_cm / 2, min(room_width_cm / 2 - width_cm / 2, x_cm))
+    y = max(-room_depth_cm / 2 + depth_cm / 2, min(room_depth_cm / 2 - depth_cm / 2, y_cm))
+    return round(x, 1), round(y, 1)
+
+
+def build_floor_plan_figure(placed_furniture, room_width_cm, room_depth_cm):
+    rw, rd = room_width_cm, room_depth_cm
+    fig = go.Figure()
+
+    fig.add_shape(
+        type="rect",
+        x0=-rw / 2,
+        y0=-rd / 2,
+        x1=rw / 2,
+        y1=rd / 2,
+        line=dict(color="#666666", width=2),
+        fillcolor="#F3F0EB",
+        layer="below",
+    )
+
+    for raw in placed_furniture:
+        item = normalize_furniture_item(raw)
+        catalog = FURNITURE_CATALOG[item["name"]]
+        x, y = item["position"][0], item["position"][1]
+        w, d = item["width_cm"], item["depth_cm"]
+        fig.add_shape(
+            type="rect",
+            x0=x - w / 2,
+            y0=y - d / 2,
+            x1=x + w / 2,
+            y1=y + d / 2,
+            line=dict(color="#222222", width=2),
+            fillcolor=catalog["color"],
+            opacity=0.88,
+        )
+        fig.add_annotation(
+            x=x,
+            y=y,
+            text=f"{item['name']}<br>{w:.0f}×{d:.0f}cm",
+            showarrow=False,
+            font=dict(size=11, color="#111111"),
+        )
+
+    fig.update_layout(
+        title="間取り図",
+        xaxis=dict(
+            title="幅 (cm)",
+            range=[-rw / 2 - 40, rw / 2 + 40],
+            constrain="domain",
+        ),
+        yaxis=dict(
+            title="奥行 (cm)",
+            range=[-rd / 2 - 40, rd / 2 + 40],
+            scaleanchor="x",
+            scaleratio=1,
+        ),
+        height=max(420, min(560, int(420 * rd / max(rw, 1)))),
+        margin=dict(l=10, r=10, t=40, b=10),
+        plot_bgcolor="#FFFFFF",
+        dragmode=False,
+    )
+    return fig
+
+
+def move_selected_furniture(dx_cm, dy_cm, room_width_cm, room_depth_cm):
+    idx = st.session_state.move_furniture_index
+    item = normalize_furniture_item(st.session_state.placed_furniture[idx])
+    x, y = clamp_furniture_position(
+        item["position"][0] + dx_cm,
+        item["position"][1] + dy_cm,
+        item["width_cm"],
+        item["depth_cm"],
+        room_width_cm,
+        room_depth_cm,
+    )
+    st.session_state.placed_furniture[idx]["position"] = [x, y, 0]
 
 
 def canvas_scale(room_width_cm, room_depth_cm):
@@ -424,51 +508,14 @@ def init_session_state():
         st.session_state.room_photos = []
     if "placed_furniture" not in st.session_state:
         st.session_state.placed_furniture = []
-    if "canvas_version" not in st.session_state:
-        st.session_state.canvas_version = 0
-    if "last_canvas_room_size" not in st.session_state:
-        st.session_state.last_canvas_room_size = None
+    if "move_furniture_index" not in st.session_state:
+        st.session_state.move_furniture_index = 0
     if "room_size" not in st.session_state:
         st.session_state.room_size = ROOM_PRESETS["6畳（約 364 × 273 cm）"]
     elif st.session_state.room_size[0] < 50:
         st.session_state.room_size = tuple(v * 100 for v in st.session_state.room_size)
-    if "last_canvas_json" not in st.session_state:
-        st.session_state.last_canvas_json = None
-
-
     if "room_preset" not in st.session_state:
         st.session_state.room_preset = "6畳（約 364 × 273 cm）"
-
-
-def sync_from_saved_canvas(room_width_cm, room_depth_cm):
-    canvas_json = st.session_state.get("last_canvas_json")
-    if canvas_json:
-        sync_canvas_to_session(canvas_json, room_width_cm, room_depth_cm)
-
-
-def bump_canvas_version():
-    st.session_state.canvas_version += 1
-
-
-def sync_canvas_to_session(canvas_json, room_width_cm, room_depth_cm):
-    """Canvas の内容を session_state に反映（空データで上書きしない）"""
-    current = [normalize_furniture_item(item) for item in st.session_state.placed_furniture]
-    parsed = parse_canvas_furniture(canvas_json, room_width_cm, room_depth_cm, current)
-    if parsed is None:
-        return
-
-    if not parsed and current:
-        return
-
-    if len(parsed) == len(current):
-        st.session_state.placed_furniture = parsed
-        return
-
-    if len(parsed) < len(current):
-        merged = [item.copy() for item in current]
-        for i, parsed_item in enumerate(parsed):
-            merged[i] = parsed_item
-        st.session_state.placed_furniture = merged
 
 
 def migrate_placed_furniture():
@@ -518,12 +565,9 @@ with tab_room:
 
     if selected_preset != st.session_state.room_preset:
         st.session_state.room_preset = selected_preset
-        bump_canvas_version()
 
     if selected_preset != "自分で入力（cm）":
         new_size = ROOM_PRESETS[selected_preset]
-        if st.session_state.room_size != new_size:
-            bump_canvas_version()
         st.session_state.room_size = new_size
         rw, rd, rh = st.session_state.room_size
         st.info(f"設定中: 幅 {rw} cm × 奥行 {rd} cm × 高さ {rh} cm")
@@ -551,8 +595,6 @@ with tab_room:
             step=5,
         )
         new_size = (room_width, room_depth, room_height)
-        if st.session_state.room_size != new_size:
-            bump_canvas_version()
         st.session_state.room_size = new_size
 
     st.divider()
@@ -608,36 +650,78 @@ with tab_room:
 with tab_layout:
     st.subheader("間取り図で家具を配置")
     st.caption(
-        "家具をタッチしてドラッグすると位置を変更できます。"
+        "間取り図をタップして家具を移動できます。"
         "色で家具の種類を区別できます。"
     )
     render_color_legend()
 
     rw, rd, rh = st.session_state.room_size
-    if st.session_state.last_canvas_room_size != (rw, rd, rh):
-        bump_canvas_version()
-        st.session_state.last_canvas_room_size = (rw, rd, rh)
 
-    px_per_cm, canvas_w, canvas_h = canvas_scale(rw, rd)
+    if st.session_state.placed_furniture:
+        if st.session_state.move_furniture_index >= len(st.session_state.placed_furniture):
+            st.session_state.move_furniture_index = 0
 
-    st.markdown("**間取り図**")
-    initial_drawing = build_canvas_drawing(st.session_state.placed_furniture, rw, rd)
-    canvas_result = st_canvas(
-        fill_color="rgba(0, 0, 0, 0)",
-        stroke_width=0,
-        background_color="#FFFFFF",
-        update_streamlit=True,
-        height=canvas_h,
-        width=canvas_w,
-        drawing_mode="transform",
-        initial_drawing=initial_drawing,
-        display_toolbar=False,
-        key=f"floor_plan_canvas_v{st.session_state.canvas_version}",
-    )
+        st.selectbox(
+            "移動する家具",
+            range(len(st.session_state.placed_furniture)),
+            index=min(
+                st.session_state.move_furniture_index,
+                len(st.session_state.placed_furniture) - 1,
+            ),
+            format_func=lambda i: (
+                f"{i + 1}. {st.session_state.placed_furniture[i]['name']}"
+            ),
+            key="move_furniture_index",
+        )
 
-    if canvas_result.json_data is not None:
-        st.session_state.last_canvas_json = canvas_result.json_data
-        sync_canvas_to_session(canvas_result.json_data, rw, rd)
+        st.markdown("**間取り図**")
+        st.caption("下の図をタップすると、選択中の家具がその位置に移動します。")
+        fig_2d = build_floor_plan_figure(st.session_state.placed_furniture, rw, rd)
+        clicked = plotly_events(
+            fig_2d,
+            click_event=True,
+            hover_event=False,
+            select_event=False,
+            override_height=450,
+            key="floor_plan_click",
+        )
+
+        if clicked:
+            point = clicked[0]
+            idx = st.session_state.move_furniture_index
+            item = normalize_furniture_item(st.session_state.placed_furniture[idx])
+            x, y = clamp_furniture_position(
+                point["x"],
+                point["y"],
+                item["width_cm"],
+                item["depth_cm"],
+                rw,
+                rd,
+            )
+            st.session_state.placed_furniture[idx]["position"] = [x, y, 0]
+            st.rerun()
+
+        st.markdown("**位置を微調整（10cm）**")
+        n1, n2, n3, n4, n5 = st.columns(5)
+        if n2.button("↑ 奥へ", use_container_width=True):
+            move_selected_furniture(0, 10, rw, rd)
+            st.rerun()
+        if n1.button("← 左へ", use_container_width=True):
+            move_selected_furniture(-10, 0, rw, rd)
+            st.rerun()
+        if n3.button("↓ 手前へ", use_container_width=True):
+            move_selected_furniture(0, -10, rw, rd)
+            st.rerun()
+        if n4.button("→ 右へ", use_container_width=True):
+            move_selected_furniture(10, 0, rw, rd)
+            st.rerun()
+        if n5.button("90°回転", use_container_width=True):
+            idx = st.session_state.move_furniture_index
+            item = st.session_state.placed_furniture[idx]
+            item["rotation"] = (float(item.get("rotation", 0)) + 90) % 360
+            st.rerun()
+    else:
+        st.info("家具を追加すると、ここに間取り図が表示されます。")
 
     st.divider()
     st.markdown("**家具を追加**")
@@ -679,7 +763,6 @@ with tab_layout:
 
     bc1, bc2, bc3 = st.columns(3)
     if bc1.button("選択した家具を追加", type="primary", use_container_width=True):
-        sync_from_saved_canvas(rw, rd)
         count = len(st.session_state.placed_furniture)
         st.session_state.placed_furniture.append(
             {
@@ -691,20 +774,20 @@ with tab_layout:
                 "height_cm": float(add_height_cm),
             }
         )
-        bump_canvas_version()
+        st.session_state.move_furniture_index = count
         st.rerun()
 
     if bc2.button("最後の家具を削除", use_container_width=True):
-        sync_from_saved_canvas(rw, rd)
         if st.session_state.placed_furniture:
             st.session_state.placed_furniture.pop()
-            bump_canvas_version()
+            st.session_state.move_furniture_index = max(
+                0, len(st.session_state.placed_furniture) - 1
+            )
             st.rerun()
 
     if bc3.button("すべてクリア", use_container_width=True):
         st.session_state.placed_furniture = []
-        st.session_state.last_canvas_json = None
-        bump_canvas_version()
+        st.session_state.move_furniture_index = 0
         st.rerun()
 
     if st.session_state.placed_furniture:
@@ -754,14 +837,12 @@ with tab_layout:
             key=f"edit_height_{edit_idx}",
         )
         if st.button("この家具のサイズを反映", key="apply_furniture_size"):
-            sync_from_saved_canvas(rw, rd)
             st.session_state.placed_furniture[edit_idx] = {
                 **edit_item,
                 "width_cm": float(edit_width),
                 "depth_cm": float(edit_depth),
                 "height_cm": float(edit_height),
             }
-            bump_canvas_version()
             st.rerun()
     else:
         st.info("「選択した家具を追加」を押すと、間取り図の中央に家具が表示されます。")

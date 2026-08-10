@@ -281,16 +281,24 @@ def parse_canvas_furniture(canvas_json, room_width_cm, room_depth_cm):
     parsed = []
 
     for obj in canvas_json.get("objects", []):
-        if obj.get("type") != "rect" or obj.get("name", "").startswith("__"):
+        if obj.get("type") != "rect":
             continue
 
-        name_part, index_part = obj["name"].rsplit("::", 1)
-        scale_x = float(obj.get("scaleX", 1) or 1)
-        scale_y = float(obj.get("scaleY", 1) or 1)
-        width_px = float(obj["width"]) * scale_x
-        height_px = float(obj["height"]) * scale_y
-        cx = float(obj["left"]) + width_px / 2
-        cy = float(obj["top"]) + height_px / 2
+        name = obj.get("name")
+        if not name or name.startswith("__") or "::" not in name:
+            continue
+
+        try:
+            name_part, index_part = name.rsplit("::", 1)
+            scale_x = float(obj.get("scaleX", 1) or 1)
+            scale_y = float(obj.get("scaleY", 1) or 1)
+            width_px = float(obj["width"]) * scale_x
+            height_px = float(obj["height"]) * scale_y
+            cx = float(obj["left"]) + width_px / 2
+            cy = float(obj["top"]) + height_px / 2
+        except (KeyError, TypeError, ValueError):
+            continue
+
         x_cm, y_cm = canvas_to_room_cm(cx, cy, room_width_cm, room_depth_cm, px_per_cm)
 
         parsed.append(

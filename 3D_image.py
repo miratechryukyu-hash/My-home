@@ -324,13 +324,40 @@ def rotated_rect_corners(x_cm, y_cm, width_cm, depth_cm, rotation_deg):
 def apply_pending_move_index():
     pending = st.session_state.pop("pending_move_index", None)
     if pending is not None:
-        st.session_state["move_furniture_select"] = pending
+        st.session_state["active_furniture_index"] = pending
 
 
 def get_selected_furniture_index():
-    idx = int(st.session_state.get("move_furniture_select", 0))
+    idx = int(st.session_state.get("active_furniture_index", 0))
     max_idx = max(0, len(st.session_state.placed_furniture) - 1)
     return min(idx, max_idx)
+
+
+def furniture_option_label(index):
+    item = normalize_furniture_item(st.session_state.placed_furniture[index])
+    return (
+        f"{index + 1}. {item['name']} "
+        f"（{format_m(item['width_cm'])}×{format_m(item['depth_cm'])}）"
+    )
+
+
+def render_selected_furniture_summary(index):
+    item = normalize_furniture_item(st.session_state.placed_furniture[index])
+    color = FURNITURE_CATALOG[item["name"]]["color"]
+    st.markdown(
+        f"""
+        **選択中の家具:** {item['name']}  
+        **サイズ:** {item['width_cm']:.0f} × {item['depth_cm']:.0f} × {item['height_cm']:.0f} cm  
+        **位置:** 横 {format_m(item['position'][0])} / 奥行 {format_m(item['position'][1])}  
+        **向き:** {item['rotation']:.0f} 度
+        """
+    )
+    st.markdown(
+        f'<span style="display:inline-block;width:18px;height:18px;'
+        f'background:{color};border:1px solid #333;margin-right:6px;"></span>'
+        f'<span>色: {item["name"]}</span>',
+        unsafe_allow_html=True,
+    )
 
 
 def build_floor_plan_figure(placed_furniture, room_width_cm, room_depth_cm):
@@ -782,119 +809,31 @@ with tab_room:
 
 with tab_layout:
     st.subheader("間取り図で家具を配置")
-    st.caption(
-        "間取り図をタップして家具を移動できます。"
-        "色で家具の種類を区別できます。"
-    )
     render_color_legend()
-
     rw, rd, rh = st.session_state.room_size
 
-    if st.session_state.placed_furniture:
-        apply_pending_move_index()
-
-        st.selectbox(
-            "移動する家具",
-            range(len(st.session_state.placed_furniture)),
-            format_func=lambda i: (
-                f"{i + 1}. {st.session_state.placed_furniture[i]['name']}"
-            ),
-            key="move_furniture_select",
-        )
-
-        st.markdown("**間取り図**")
-        st.caption("下の図をタップすると、選択中の家具がその位置に移動します。")
-        fig_2d = build_floor_plan_figure(st.session_state.placed_furniture, rw, rd)
-        clicked = plotly_events(
-            fig_2d,
-            click_event=True,
-            hover_event=False,
-            select_event=False,
-            override_height=450,
-            key="floor_plan_click",
-        )
-
-        if clicked:
-            point = clicked[0]
-            idx = get_selected_furniture_index()
-            item = normalize_furniture_item(st.session_state.placed_furniture[idx])
-            x, y = clamp_furniture_position(
-                point["x"] * 100,
-                point["y"] * 100,
-                item["width_cm"],
-                item["depth_cm"],
-                rw,
-                rd,
-                item["rotation"],
-            )
-            st.session_state.placed_furniture[idx]["position"] = [x, y, 0]
-            st.rerun()
-
-        st.markdown("**位置を微調整（10cm）**")
-        n1, n2, n3, n4, n5 = st.columns(5)
-        if n2.button("↑ 奥へ", use_container_width=True):
-            move_selected_furniture(0, 10, rw, rd)
-            st.rerun()
-        if n1.button("← 左へ", use_container_width=True):
-            move_selected_furniture(-10, 0, rw, rd)
-            st.rerun()
-        if n3.button("↓ 手前へ", use_container_width=True):
-            move_selected_furniture(0, -10, rw, rd)
-            st.rerun()
-        if n4.button("→ 右へ", use_container_width=True):
-            move_selected_furniture(10, 0, rw, rd)
-            st.rerun()
-        if n5.button("90°回転", use_container_width=True):
-            idx = get_selected_furniture_index()
-            item = normalize_furniture_item(st.session_state.placed_furniture[idx])
-            new_rotation = (item["rotation"] + 90) % 360
-            x, y = clamp_furniture_position(
-                item["position"][0],
-                item["position"][1],
-                item["width_cm"],
-                item["depth_cm"],
-                rw,
-                rd,
-                new_rotation,
-            )
-            st.session_state.placed_furniture[idx] = {
-                **item,
-                "rotation": new_rotation,
-                "position": [x, y, 0],
-            }
-            st.rerun()
-
-        st.markdown("**壁ぎりぎりに配置**")
-        s1, s2, s3, s4 = st.columns(4)
-        if s1.button("奥ぎりぎり", use_container_width=True):
-            snap_selected_furniture_to_wall("back", rw, rd)
-            st.rerun()
-        if s2.button("手前ぎりぎり", use_container_width=True):
-            snap_selected_furniture_to_wall("front", rw, rd)
-            st.rerun()
-        if s3.button("左ぎりぎり", use_container_width=True):
-            snap_selected_furniture_to_wall("left", rw, rd)
-            st.rerun()
-        if s4.button("右ぎりぎり", use_container_width=True):
-            snap_selected_furniture_to_wall("right", rw, rd)
-            st.rerun()
-    else:
-        st.info("家具を追加すると、ここに間取り図が表示されます。")
-
-    st.divider()
-    st.markdown("**家具を追加**")
+    # ── 1. 家具を選ぶ ───────────────────────────────────────────
+    st.markdown("### 1. 家具を選ぶ")
+    st.caption("追加する家具の種類とサイズを選び、「この家具を追加」を押してください。")
 
     furniture_name = st.selectbox(
-        "追加する家具",
+        "追加する家具の種類",
         list(FURNITURE_CATALOG.keys()),
         key="furniture_select",
     )
 
     defaults = FURNITURE_CATALOG[furniture_name]["default_cm"]
-    st.markdown("**家具のサイズ（cm）**")
+    add_color = FURNITURE_CATALOG[furniture_name]["color"]
+    st.markdown(
+        f'<span style="display:inline-block;width:14px;height:14px;background:{add_color};'
+        f'border:1px solid #333;margin-right:6px;"></span>'
+        f"**選択中の種類:** {furniture_name}",
+        unsafe_allow_html=True,
+    )
+
     size_c1, size_c2, size_c3 = st.columns(3)
     add_width_cm = size_c1.number_input(
-        "横（幅）",
+        "横（幅）cm",
         min_value=30,
         max_value=400,
         value=int(defaults["width"]),
@@ -902,7 +841,7 @@ with tab_layout:
         key=f"add_furniture_width_{furniture_name}",
     )
     add_depth_cm = size_c2.number_input(
-        "縦（奥行）",
+        "縦（奥行）cm",
         min_value=30,
         max_value=400,
         value=int(defaults["depth"]),
@@ -910,17 +849,16 @@ with tab_layout:
         key=f"add_furniture_depth_{furniture_name}",
     )
     add_height_cm = size_c3.number_input(
-        "高さ",
+        "高さ cm",
         min_value=30,
         max_value=300,
         value=int(defaults["height"]),
         step=5,
         key=f"add_furniture_height_{furniture_name}",
     )
-    st.caption("一般的なサイズが初期値です。実際の商品サイズが分かれば入力してください。")
 
     bc1, bc2, bc3 = st.columns(3)
-    if bc1.button("選択した家具を追加", type="primary", use_container_width=True):
+    if bc1.button("この家具を追加", type="primary", use_container_width=True):
         count = len(st.session_state.placed_furniture)
         st.session_state.placed_furniture.append(
             {
@@ -948,54 +886,158 @@ with tab_layout:
         st.session_state.pending_move_index = 0
         st.rerun()
 
-    if st.session_state.placed_furniture:
-        st.markdown("**配置済み家具**")
-        for i, raw in enumerate(st.session_state.placed_furniture, 1):
-            item = normalize_furniture_item(raw)
-            st.text(
-                f"{i}. {item['name']} — "
-                f"サイズ {item['width_cm']:.0f} × {item['depth_cm']:.0f} × {item['height_cm']:.0f} cm, "
-                f"位置 ({item['position'][0]:.0f}, {item['position'][1]:.0f}) cm, "
-                f"向き {item['rotation']:.0f} 度"
-            )
+    st.divider()
 
-        st.markdown("**配置済み家具のサイズ変更**")
-        edit_idx = st.selectbox(
-            "変更する家具",
-            range(len(st.session_state.placed_furniture)),
-            format_func=lambda i: (
-                f"{i + 1}. {st.session_state.placed_furniture[i]['name']}"
-            ),
-            key="edit_furniture_index",
+    # ── 2. 配置する家具を選ぶ（手動選択） ───────────────────────
+    st.markdown("### 2. 配置する家具を選ぶ")
+    if st.session_state.placed_furniture:
+        apply_pending_move_index()
+
+        st.caption("操作したい家具を手動で選んでください（移動・回転・サイズ変更の対象）。")
+        st.radio(
+            "操作する家具（手動選択）",
+            options=list(range(len(st.session_state.placed_furniture))),
+            format_func=furniture_option_label,
+            key="active_furniture_index",
         )
-        edit_item = normalize_furniture_item(st.session_state.placed_furniture[edit_idx])
+
+        active_idx = get_selected_furniture_index()
+        render_selected_furniture_summary(active_idx)
+
+        with st.expander("配置済み家具一覧"):
+            for i, raw in enumerate(st.session_state.placed_furniture, 1):
+                item = normalize_furniture_item(raw)
+                marker = " ← 選択中" if i - 1 == active_idx else ""
+                st.text(
+                    f"{i}. {item['name']} — "
+                    f"{item['width_cm']:.0f}×{item['depth_cm']:.0f}×{item['height_cm']:.0f} cm, "
+                    f"位置 ({format_m(item['position'][0])}, {format_m(item['position'][1])})"
+                    f"{marker}"
+                )
+    else:
+        st.info("「1. 家具を選ぶ」で家具を追加すると、ここで操作対象を選べます。")
+
+    st.divider()
+
+    # ── 3. 2D間取り図 ─────────────────────────────────────────
+    st.markdown("### 3. 2D間取り図")
+    if st.session_state.placed_furniture:
+        st.caption("図をタップすると、手順2で選んだ家具がその位置に移動します。")
+    else:
+        st.caption("家具を追加すると、ここに配置図が表示されます。")
+
+    fig_2d = build_floor_plan_figure(st.session_state.placed_furniture, rw, rd)
+    if st.session_state.placed_furniture:
+        clicked = plotly_events(
+            fig_2d,
+            click_event=True,
+            hover_event=False,
+            select_event=False,
+            override_height=450,
+            key="floor_plan_click",
+        )
+
+        if clicked:
+            point = clicked[0]
+            idx = get_selected_furniture_index()
+            item = normalize_furniture_item(st.session_state.placed_furniture[idx])
+            x, y = clamp_furniture_position(
+                point["x"] * 100,
+                point["y"] * 100,
+                item["width_cm"],
+                item["depth_cm"],
+                rw,
+                rd,
+                item["rotation"],
+            )
+            st.session_state.placed_furniture[idx]["position"] = [x, y, 0]
+            st.rerun()
+    else:
+        st.plotly_chart(fig_2d, use_container_width=True, key="floor_plan_empty")
+
+    st.divider()
+
+    # ── 4. 配置操作 ───────────────────────────────────────────
+    st.markdown("### 4. 配置操作")
+    if st.session_state.placed_furniture:
+        active_idx = get_selected_furniture_index()
+        edit_item = normalize_furniture_item(st.session_state.placed_furniture[active_idx])
+
+        st.markdown("**位置を微調整（10cm）**")
+        n1, n2, n3, n4, n5 = st.columns(5)
+        if n2.button("↑ 奥へ", use_container_width=True):
+            move_selected_furniture(0, 10, rw, rd)
+            st.rerun()
+        if n1.button("← 左へ", use_container_width=True):
+            move_selected_furniture(-10, 0, rw, rd)
+            st.rerun()
+        if n3.button("↓ 手前へ", use_container_width=True):
+            move_selected_furniture(0, -10, rw, rd)
+            st.rerun()
+        if n4.button("→ 右へ", use_container_width=True):
+            move_selected_furniture(10, 0, rw, rd)
+            st.rerun()
+        if n5.button("90°回転", use_container_width=True):
+            new_rotation = (edit_item["rotation"] + 90) % 360
+            x, y = clamp_furniture_position(
+                edit_item["position"][0],
+                edit_item["position"][1],
+                edit_item["width_cm"],
+                edit_item["depth_cm"],
+                rw,
+                rd,
+                new_rotation,
+            )
+            st.session_state.placed_furniture[active_idx] = {
+                **edit_item,
+                "rotation": new_rotation,
+                "position": [x, y, 0],
+            }
+            st.rerun()
+
+        st.markdown("**壁ぎりぎりに配置**")
+        s1, s2, s3, s4 = st.columns(4)
+        if s1.button("奥ぎりぎり", use_container_width=True):
+            snap_selected_furniture_to_wall("back", rw, rd)
+            st.rerun()
+        if s2.button("手前ぎりぎり", use_container_width=True):
+            snap_selected_furniture_to_wall("front", rw, rd)
+            st.rerun()
+        if s3.button("左ぎりぎり", use_container_width=True):
+            snap_selected_furniture_to_wall("left", rw, rd)
+            st.rerun()
+        if s4.button("右ぎりぎり", use_container_width=True):
+            snap_selected_furniture_to_wall("right", rw, rd)
+            st.rerun()
+
+        st.markdown("**サイズを変更（手動入力）**")
         edit_c1, edit_c2, edit_c3 = st.columns(3)
         edit_width = edit_c1.number_input(
-            "横（幅）",
+            "横（幅）cm",
             min_value=30,
             max_value=400,
             value=int(edit_item["width_cm"]),
             step=5,
-            key=f"edit_width_{edit_idx}",
+            key=f"edit_width_{active_idx}",
         )
         edit_depth = edit_c2.number_input(
-            "縦（奥行）",
+            "縦（奥行）cm",
             min_value=30,
             max_value=400,
             value=int(edit_item["depth_cm"]),
             step=5,
-            key=f"edit_depth_{edit_idx}",
+            key=f"edit_depth_{active_idx}",
         )
         edit_height = edit_c3.number_input(
-            "高さ",
+            "高さ cm",
             min_value=30,
             max_value=300,
             value=int(edit_item["height_cm"]),
             step=5,
-            key=f"edit_height_{edit_idx}",
+            key=f"edit_height_{active_idx}",
         )
-        if st.button("この家具のサイズを反映", key="apply_furniture_size"):
-            st.session_state.placed_furniture[edit_idx] = {
+        if st.button("サイズを反映", key="apply_furniture_size"):
+            st.session_state.placed_furniture[active_idx] = {
                 **edit_item,
                 "width_cm": float(edit_width),
                 "depth_cm": float(edit_depth),
@@ -1003,7 +1045,7 @@ with tab_layout:
             }
             st.rerun()
     else:
-        st.info("「選択した家具を追加」を押すと、間取り図の中央に家具が表示されます。")
+        st.info("家具を追加すると、配置操作が使えるようになります。")
 
     st.divider()
     st.subheader("3Dプレビュー")

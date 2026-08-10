@@ -17,16 +17,33 @@ CANVAS_MAX_PX = 680
 
 # 関東間（1畳 182cm×91cm）を基準にした一般的な目安（幅 × 奥行 × 高さ cm）
 ROOM_PRESETS = {
-    "4.5畳（約 273 × 273 cm）": (273, 273, 240),
-    "6畳（約 364 × 273 cm）": (364, 273, 240),
-    "7畳（約 364 × 318 cm）": (364, 318, 240),
-    "8畳（約 364 × 364 cm）": (364, 364, 240),
-    "10畳（約 455 × 364 cm）": (455, 364, 240),
-    "12畳（約 546 × 455 cm）": (546, 455, 240),
+    "4.5畳（約 2.7 × 2.7 m）": (273, 273, 240),
+    "6畳（約 3.6 × 2.7 m）": (364, 273, 240),
+    "7畳（約 3.6 × 3.2 m）": (364, 318, 240),
+    "8畳（約 3.6 × 3.6 m）": (364, 364, 240),
+    "10畳（約 4.6 × 3.6 m）": (455, 364, 240),
+    "12畳（約 5.5 × 4.6 m）": (546, 455, 240),
 }
 PRESET_OPTIONS = list(ROOM_PRESETS.keys()) + ["自分で入力（cm）"]
 
+LEGACY_PRESET_MAP = {
+    "4.5畳（約 273 × 273 cm）": "4.5畳（約 2.7 × 2.7 m）",
+    "6畳（約 364 × 273 cm）": "6畳（約 3.6 × 2.7 m）",
+    "7畳（約 364 × 318 cm）": "7畳（約 3.6 × 3.2 m）",
+    "8畳（約 364 × 364 cm）": "8畳（約 3.6 × 3.6 m）",
+    "10畳（約 455 × 364 cm）": "10畳（約 4.6 × 3.6 m）",
+    "12畳（約 546 × 455 cm）": "12畳（約 5.5 × 4.6 m）",
+}
+
 # ── 家具メッシュ生成（単位: cm） ───────────────────────────────
+
+
+def cm_to_m(cm):
+    return cm / 100.0
+
+
+def format_m(cm, digits=1):
+    return f"{cm_to_m(cm):.{digits}f} m"
 
 
 def _box(extents, color="lightgray"):
@@ -317,15 +334,17 @@ def get_selected_furniture_index():
 
 
 def build_floor_plan_figure(placed_furniture, room_width_cm, room_depth_cm):
-    rw, rd = room_width_cm, room_depth_cm
+    rw_m = cm_to_m(room_width_cm)
+    rd_m = cm_to_m(room_depth_cm)
+    margin_m = 0.4
     fig = go.Figure()
 
     fig.add_shape(
         type="rect",
-        x0=-rw / 2,
-        y0=-rd / 2,
-        x1=rw / 2,
-        y1=rd / 2,
+        x0=-rw_m / 2,
+        y0=-rd_m / 2,
+        x1=rw_m / 2,
+        y1=rd_m / 2,
         line=dict(color="#666666", width=2),
         fillcolor="#F3F0EB",
         layer="below",
@@ -334,12 +353,20 @@ def build_floor_plan_figure(placed_furniture, room_width_cm, room_depth_cm):
     for raw in placed_furniture:
         item = normalize_furniture_item(raw)
         catalog = FURNITURE_CATALOG[item["name"]]
-        x, y = item["position"][0], item["position"][1]
-        w, d = item["width_cm"], item["depth_cm"]
+        x_m = cm_to_m(item["position"][0])
+        y_m = cm_to_m(item["position"][1])
+        w_m = cm_to_m(item["width_cm"])
+        d_m = cm_to_m(item["depth_cm"])
         rotation = item["rotation"]
-        corners = rotated_rect_corners(x, y, w, d, rotation)
-        xs = [c[0] for c in corners] + [corners[0][0]]
-        ys = [c[1] for c in corners] + [corners[0][1]]
+        corners = rotated_rect_corners(
+            item["position"][0],
+            item["position"][1],
+            item["width_cm"],
+            item["depth_cm"],
+            rotation,
+        )
+        xs = [cm_to_m(c[0]) for c in corners] + [cm_to_m(corners[0][0])]
+        ys = [cm_to_m(c[1]) for c in corners] + [cm_to_m(corners[0][1])]
         fig.add_trace(
             go.Scatter(
                 x=xs,
@@ -354,9 +381,12 @@ def build_floor_plan_figure(placed_furniture, room_width_cm, room_depth_cm):
             )
         )
         fig.add_annotation(
-            x=x,
-            y=y,
-            text=f"{item['name']}<br>{w:.0f}×{d:.0f}cm<br>{rotation:.0f}°",
+            x=x_m,
+            y=y_m,
+            text=(
+                f"{item['name']}<br>{w_m:.1f}×{d_m:.1f} m"
+                f"<br>{rotation:.0f}°"
+            ),
             showarrow=False,
             font=dict(size=11, color="#111111"),
         )
@@ -364,17 +394,19 @@ def build_floor_plan_figure(placed_furniture, room_width_cm, room_depth_cm):
     fig.update_layout(
         title="間取り図",
         xaxis=dict(
-            title="幅 (cm)",
-            range=[-rw / 2 - 40, rw / 2 + 40],
+            title="幅 (m)",
+            range=[-rw_m / 2 - margin_m, rw_m / 2 + margin_m],
+            tickformat=".1f",
             constrain="domain",
         ),
         yaxis=dict(
-            title="奥行 (cm)",
-            range=[-rd / 2 - 40, rd / 2 + 40],
+            title="奥行 (m)",
+            range=[-rd_m / 2 - margin_m, rd_m / 2 + margin_m],
+            tickformat=".1f",
             scaleanchor="x",
             scaleratio=1,
         ),
-        height=max(420, min(560, int(420 * rd / max(rw, 1)))),
+        height=max(420, min(560, int(420 * rd_m / max(rw_m, 0.01)))),
         margin=dict(l=10, r=10, t=40, b=10),
         plot_bgcolor="#FFFFFF",
         dragmode=False,
@@ -586,11 +618,13 @@ def init_session_state():
     if "placed_furniture" not in st.session_state:
         st.session_state.placed_furniture = []
     if "room_size" not in st.session_state:
-        st.session_state.room_size = ROOM_PRESETS["6畳（約 364 × 273 cm）"]
+        st.session_state.room_size = ROOM_PRESETS["6畳（約 3.6 × 2.7 m）"]
     elif st.session_state.room_size[0] < 50:
         st.session_state.room_size = tuple(v * 100 for v in st.session_state.room_size)
     if "room_preset" not in st.session_state:
-        st.session_state.room_preset = "6畳（約 364 × 273 cm）"
+        st.session_state.room_preset = "6畳（約 3.6 × 2.7 m）"
+    elif st.session_state.room_preset in LEGACY_PRESET_MAP:
+        st.session_state.room_preset = LEGACY_PRESET_MAP[st.session_state.room_preset]
 
 
 def migrate_placed_furniture():
@@ -609,14 +643,15 @@ st.markdown(
     """
 **このアプリでできること（現在）**
 
-1. 畳数（6畳・7畳など）を選ぶか、部屋の大きさを入力して3D空間を作る
-2. 間取り図上で家具をタッチして動かし、配置イメージを作る
-3. 「実際の部屋の写真」と「家具配置の3Dイメージ」を並べて共有する
+1. 畳数（6畳・7畳など）を選んで、部屋の3D空間を作る
+2. 間取り図（m表示）で家具を配置し、レイアウトイメージを作る
+3. 3Dシミュレーションを画像として保存・共有する
 
-**写真について**
+**写真について（重要）**
 
-写真は **「今の部屋の様子」** として共有画面に表示されます。
-3D空間は **部屋のサイズ入力** から作っています。
+写真からAIが部屋を自動認識する機能は **まだ実装されていません**。
+今は **畳数・サイズ入力** で部屋を作っています。
+写真機能は、将来そのAI読み取りに使うための準備段階です。
 """
 )
 
@@ -630,7 +665,11 @@ with tab_room:
     st.subheader("部屋のサイズ")
     st.caption("畳数を選ぶと、一般的なお部屋の大きさが自動で入ります。")
 
-    preset_index = PRESET_OPTIONS.index(st.session_state.room_preset)
+    preset_index = (
+        PRESET_OPTIONS.index(st.session_state.room_preset)
+        if st.session_state.room_preset in PRESET_OPTIONS
+        else 1
+    )
     selected_preset = st.selectbox(
         "部屋の広さ",
         PRESET_OPTIONS,
@@ -645,7 +684,9 @@ with tab_room:
         new_size = ROOM_PRESETS[selected_preset]
         st.session_state.room_size = new_size
         rw, rd, rh = st.session_state.room_size
-        st.info(f"設定中: 幅 {rw} cm × 奥行 {rd} cm × 高さ {rh} cm")
+        st.info(
+            f"設定中: 幅 {format_m(rw)} × 奥行 {format_m(rd)} × 高さ {format_m(rh)}"
+        )
     else:
         c1, c2, c3 = st.columns(3)
         room_width = c1.number_input(
@@ -673,52 +714,69 @@ with tab_room:
         st.session_state.room_size = new_size
 
     st.divider()
-    st.subheader("部屋の参考写真（任意）")
+    st.subheader("写真から部屋を読み取る（開発予定）")
     st.markdown(
-        "共有するときに **「今の部屋」** として一緒に見せるための写真です。"
-        "3D空間の形には影響しません。"
+        """
+        **目指している機能**
+
+        1. 部屋の写真を撮る
+        2. AIが空間の形や、すでに置いてある物を読み取る
+        3. おおよそのバーチャル空間を自動生成する
+
+        **現在**
+
+        - 上記のAI読み取りは **未実装** です
+        - 今の3D空間は **畳数・サイズ入力** から作っています
+        - 写真を撮っても、配置シミュレーションには **まだ反映されません**
+        """
     )
 
-    col_cam, col_upload = st.columns(2)
-
-    with col_cam:
-        st.markdown("**カメラで撮影**（スマホブラウザ対応）")
-        camera_photo = st.camera_input("部屋の写真", label_visibility="collapsed")
-
-    with col_upload:
-        st.markdown("**ファイルからアップロード**")
-        uploaded_photos = st.file_uploader(
-            "写真（複数可）",
-            type=["jpg", "jpeg", "png", "heic"],
-            accept_multiple_files=True,
-            label_visibility="collapsed",
+    with st.expander("将来のAI用：部屋の写真を保存（任意・現在未使用）"):
+        st.caption(
+            "開発が進んだら、この写真から部屋を自動認識する予定です。"
+            "今は保存のみで、シミュレーションには使われません。"
         )
 
-    pending = []
-    if camera_photo is not None:
-        pending.append({"label": "カメラ撮影", "data": camera_photo.getvalue()})
-    if uploaded_photos:
-        for photo in uploaded_photos:
-            pending.append({"label": photo.name, "data": photo.getvalue()})
+        col_cam, col_upload = st.columns(2)
 
-    bc1, bc2 = st.columns(2)
-    if bc1.button("写真を記録する", type="primary", disabled=not pending):
-        st.session_state.room_photos = pending
-        st.rerun()
+        with col_cam:
+            st.markdown("**カメラで撮影**")
+            camera_photo = st.camera_input("部屋の写真", label_visibility="collapsed")
 
-    if bc2.button("記録した写真をすべて削除", disabled=not st.session_state.room_photos):
-        st.session_state.room_photos = []
-        st.rerun()
-
-    if st.session_state.room_photos:
-        st.success(f"{len(st.session_state.room_photos)} 枚の参考写真を記録中")
-        cols = st.columns(min(len(st.session_state.room_photos), 4))
-        for i, photo in enumerate(st.session_state.room_photos):
-            cols[i % len(cols)].image(
-                photo["data"], caption=photo["label"], use_container_width=True
+        with col_upload:
+            st.markdown("**ファイルからアップロード**")
+            uploaded_photos = st.file_uploader(
+                "写真（複数可）",
+                type=["jpg", "jpeg", "png", "heic"],
+                accept_multiple_files=True,
+                label_visibility="collapsed",
             )
-    else:
-        st.caption("参考写真はまだ記録されていません。")
+
+        pending = []
+        if camera_photo is not None:
+            pending.append(("カメラ撮影", camera_photo.getvalue()))
+        if uploaded_photos:
+            for photo in uploaded_photos:
+                pending.append((photo.name, photo.getvalue()))
+
+        bc1, bc2 = st.columns(2)
+        if bc1.button("写真を保存", type="primary", disabled=not pending):
+            st.session_state.room_photos = [
+                {"label": label, "data": data} for label, data in pending
+            ]
+            st.rerun()
+
+        if bc2.button("保存した写真を削除", disabled=not st.session_state.room_photos):
+            st.session_state.room_photos = []
+            st.rerun()
+
+        if st.session_state.room_photos:
+            st.success(f"{len(st.session_state.room_photos)} 枚を保存中（AI解析待ち）")
+            cols = st.columns(min(len(st.session_state.room_photos), 4))
+            for i, photo in enumerate(st.session_state.room_photos):
+                cols[i % len(cols)].image(
+                    photo["data"], caption=photo["label"], use_container_width=True
+                )
 
 # ── Tab 2: 家具の配置 ─────────────────────────────────────────
 
@@ -761,8 +819,8 @@ with tab_layout:
             idx = get_selected_furniture_index()
             item = normalize_furniture_item(st.session_state.placed_furniture[idx])
             x, y = clamp_furniture_position(
-                point["x"],
-                point["y"],
+                point["x"] * 100,
+                point["y"] * 100,
                 item["width_cm"],
                 item["depth_cm"],
                 rw,
@@ -956,31 +1014,20 @@ with tab_layout:
 # ── Tab 3: プレビューと共有 ───────────────────────────────────
 
 with tab_share:
-    st.subheader("プレビュー")
-    st.caption(
-        "左（または上）が実際の部屋の写真、右（または下）が家具を配置した3Dシミュレーションです。"
-    )
+    st.subheader("プレビューと共有")
 
     rw, rd, rh = st.session_state.room_size
     room_mesh = create_room(rw, rd, rh)
     fig = build_scene_figure(room_mesh, build_placed_items(st.session_state.placed_furniture))
 
+    st.markdown("**家具配置シミュレーション（3D）**")
+    st.plotly_chart(fig, use_container_width=True, key="share_3d_preview")
+
     if st.session_state.room_photos:
-        col_photo, col_3d = st.columns(2)
-        with col_photo:
-            st.markdown("**実際の部屋**")
+        with st.expander(f"保存済みの部屋写真（{len(st.session_state.room_photos)}枚・AI解析待ち）"):
             for photo in st.session_state.room_photos:
                 st.image(photo["data"], caption=photo["label"], use_container_width=True)
-        with col_3d:
-            st.markdown("**家具配置シミュレーション**")
-            st.plotly_chart(fig, use_container_width=True, key="share_3d_with_photo")
-    else:
-        st.markdown("**家具配置シミュレーション**")
-        st.plotly_chart(fig, use_container_width=True, key="share_3d_only")
-        st.info(
-            "参考写真が未登録です。「1. 部屋の設定」で写真を記録すると、"
-            "実際の部屋と3Dシミュレーションを並べて見せられます。"
-        )
+            st.caption("これらの写真は、将来AIが部屋を読み取る機能で使用する予定です。")
 
     st.divider()
     st.subheader("イメージを共有")
@@ -1007,9 +1054,9 @@ with tab_share:
     with st.expander("今後追加予定の機能"):
         st.markdown(
             """
-            - 写真・動画からの3D空間の自動復元（フォトグラメトリ）
+            - **写真・動画からAIが部屋を読み取り、3D空間を自動生成**
+            - 既存の家具や壁・窓の認識
             - より多くの家具カタログ（カスタムモデルの読み込み）
-            - 壁・窓の自動検出
             - 共有リンクの生成
             """
         )

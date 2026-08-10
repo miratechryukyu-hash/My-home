@@ -276,6 +276,35 @@ def clamp_furniture_position(x_cm, y_cm, width_cm, depth_cm, room_width_cm, room
     return round(x, 1), round(y, 1)
 
 
+def rotated_rect_corners(x_cm, y_cm, width_cm, depth_cm, rotation_deg):
+    angle = np.radians(rotation_deg)
+    cos_a, sin_a = np.cos(angle), np.sin(angle)
+    local_corners = [
+        (-width_cm / 2, -depth_cm / 2),
+        (width_cm / 2, -depth_cm / 2),
+        (width_cm / 2, depth_cm / 2),
+        (-width_cm / 2, depth_cm / 2),
+    ]
+    corners = []
+    for lx, ly in local_corners:
+        rx = lx * cos_a - ly * sin_a + x_cm
+        ry = lx * sin_a + ly * cos_a + y_cm
+        corners.append((rx, ry))
+    return corners
+
+
+def apply_pending_move_index():
+    pending = st.session_state.pop("pending_move_index", None)
+    if pending is not None:
+        st.session_state["move_furniture_select"] = pending
+
+
+def get_selected_furniture_index():
+    idx = int(st.session_state.get("move_furniture_select", 0))
+    max_idx = max(0, len(st.session_state.placed_furniture) - 1)
+    return min(idx, max_idx)
+
+
 def build_floor_plan_figure(placed_furniture, room_width_cm, room_depth_cm):
     rw, rd = room_width_cm, room_depth_cm
     fig = go.Figure()
@@ -296,20 +325,27 @@ def build_floor_plan_figure(placed_furniture, room_width_cm, room_depth_cm):
         catalog = FURNITURE_CATALOG[item["name"]]
         x, y = item["position"][0], item["position"][1]
         w, d = item["width_cm"], item["depth_cm"]
-        fig.add_shape(
-            type="rect",
-            x0=x - w / 2,
-            y0=y - d / 2,
-            x1=x + w / 2,
-            y1=y + d / 2,
-            line=dict(color="#222222", width=2),
-            fillcolor=catalog["color"],
-            opacity=0.88,
+        rotation = item["rotation"]
+        corners = rotated_rect_corners(x, y, w, d, rotation)
+        xs = [c[0] for c in corners] + [corners[0][0]]
+        ys = [c[1] for c in corners] + [corners[0][1]]
+        fig.add_trace(
+            go.Scatter(
+                x=xs,
+                y=ys,
+                fill="toself",
+                fillcolor=catalog["color"],
+                line=dict(color="#222222", width=2),
+                opacity=0.88,
+                mode="lines",
+                hoverinfo="skip",
+                showlegend=False,
+            )
         )
         fig.add_annotation(
             x=x,
             y=y,
-            text=f"{item['name']}<br>{w:.0f}×{d:.0f}cm",
+            text=f"{item['name']}<br>{w:.0f}×{d:.0f}cm<br>{rotation:.0f}°",
             showarrow=False,
             font=dict(size=11, color="#111111"),
         )
@@ -336,7 +372,7 @@ def build_floor_plan_figure(placed_furniture, room_width_cm, room_depth_cm):
 
 
 def move_selected_furniture(dx_cm, dy_cm, room_width_cm, room_depth_cm):
-    idx = st.session_state.move_furniture_index
+    idx = get_selected_furniture_index()
     item = normalize_furniture_item(st.session_state.placed_furniture[idx])
     x, y = clamp_furniture_position(
         item["position"][0] + dx_cm,
@@ -508,8 +544,6 @@ def init_session_state():
         st.session_state.room_photos = []
     if "placed_furniture" not in st.session_state:
         st.session_state.placed_furniture = []
-    if "move_furniture_index" not in st.session_state:
-        st.session_state.move_furniture_index = 0
     if "room_size" not in st.session_state:
         st.session_state.room_size = ROOM_PRESETS["6畳（約 364 × 273 cm）"]
     elif st.session_state.room_size[0] < 50:
@@ -658,20 +692,15 @@ with tab_layout:
     rw, rd, rh = st.session_state.room_size
 
     if st.session_state.placed_furniture:
-        if st.session_state.move_furniture_index >= len(st.session_state.placed_furniture):
-            st.session_state.move_furniture_index = 0
+        apply_pending_move_index()
 
         st.selectbox(
             "移動する家具",
             range(len(st.session_state.placed_furniture)),
-            index=min(
-                st.session_state.move_furniture_index,
-                len(st.session_state.placed_furniture) - 1,
-            ),
             format_func=lambda i: (
                 f"{i + 1}. {st.session_state.placed_furniture[i]['name']}"
             ),
-            key="move_furniture_index",
+            key="move_furniture_select",
         )
 
         st.markdown("**間取り図**")
@@ -688,7 +717,7 @@ with tab_layout:
 
         if clicked:
             point = clicked[0]
-            idx = st.session_state.move_furniture_index
+            idx = get_selected_furniture_index()
             item = normalize_furniture_item(st.session_state.placed_furniture[idx])
             x, y = clamp_furniture_position(
                 point["x"],
@@ -716,9 +745,12 @@ with tab_layout:
             move_selected_furniture(10, 0, rw, rd)
             st.rerun()
         if n5.button("90°回転", use_container_width=True):
-            idx = st.session_state.move_furniture_index
-            item = st.session_state.placed_furniture[idx]
-            item["rotation"] = (float(item.get("rotation", 0)) + 90) % 360
+            idx = get_selected_furniture_index()
+            item = normalize_furniture_item(st.session_state.placed_furniture[idx])
+            st.session_state.placed_furniture[idx] = {
+                **item,
+                "rotation": (item["rotation"] + 90) % 360,
+            }
             st.rerun()
     else:
         st.info("家具を追加すると、ここに間取り図が表示されます。")
@@ -774,20 +806,20 @@ with tab_layout:
                 "height_cm": float(add_height_cm),
             }
         )
-        st.session_state.move_furniture_index = count
+        st.session_state.pending_move_index = count
         st.rerun()
 
     if bc2.button("最後の家具を削除", use_container_width=True):
         if st.session_state.placed_furniture:
             st.session_state.placed_furniture.pop()
-            st.session_state.move_furniture_index = max(
+            st.session_state.pending_move_index = max(
                 0, len(st.session_state.placed_furniture) - 1
             )
             st.rerun()
 
     if bc3.button("すべてクリア", use_container_width=True):
         st.session_state.placed_furniture = []
-        st.session_state.move_furniture_index = 0
+        st.session_state.pending_move_index = 0
         st.rerun()
 
     if st.session_state.placed_furniture:

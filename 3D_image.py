@@ -112,6 +112,16 @@ def create_chair():
     return trimesh.util.concatenate([seat, back])
 
 
+def create_generic_box():
+    """手入力家具用の汎用ボックス（100×100×100 cm、底面 z=0）"""
+    box = _box([100, 100, 100])
+    box.apply_translation([0, 0, 50])
+    return box
+
+
+CUSTOM_FURNITURE_COLOR = "#757575"
+CUSTOM_FURNITURE_DEFAULT_CM = {"width": 100, "depth": 100, "height": 100}
+
 FURNITURE_CATALOG = {
     "2段ベッド": {
         "factory": create_bunk_bed,
@@ -139,6 +149,20 @@ FURNITURE_CATALOG = {
         "default_cm": {"width": 180, "depth": 80, "height": 85},
     },
 }
+
+
+def is_custom_furniture(item):
+    return bool(item.get("is_custom")) or item["name"] not in FURNITURE_CATALOG
+
+
+def get_furniture_info(item):
+    if is_custom_furniture(item):
+        return {
+            "factory": create_generic_box,
+            "color": CUSTOM_FURNITURE_COLOR,
+            "default_cm": CUSTOM_FURNITURE_DEFAULT_CM,
+        }
+    return FURNITURE_CATALOG[item["name"]]
 
 
 def new_furniture_position(existing_count, room_width_cm, room_depth_cm):
@@ -169,7 +193,7 @@ def render_color_legend():
 
 
 def normalize_furniture_item(item):
-    catalog = FURNITURE_CATALOG[item["name"]]
+    catalog = get_furniture_info(item)
     defaults = catalog["default_cm"]
     scale = float(item.get("scale", 1.0) or 1.0)
     return {
@@ -179,11 +203,15 @@ def normalize_furniture_item(item):
         "width_cm": float(item.get("width_cm", defaults["width"] * scale)),
         "depth_cm": float(item.get("depth_cm", defaults["depth"] * scale)),
         "height_cm": float(item.get("height_cm", defaults["height"] * scale)),
+        "is_custom": is_custom_furniture(item),
     }
 
 
-def furniture_scale_xyz(name, width_cm, depth_cm, height_cm):
-    defaults = FURNITURE_CATALOG[name]["default_cm"]
+def furniture_scale_xyz(name, width_cm, depth_cm, height_cm, is_custom=False):
+    if is_custom or name not in FURNITURE_CATALOG:
+        defaults = CUSTOM_FURNITURE_DEFAULT_CM
+    else:
+        defaults = FURNITURE_CATALOG[name]["default_cm"]
     return (
         width_cm / defaults["width"],
         depth_cm / defaults["depth"],
@@ -220,6 +248,9 @@ def apply_transform(mesh, position_cm, rotation_deg, scale_xyz=(1.0, 1.0, 1.0)):
             np.radians(rotation_deg), [0, 0, 1]
         )
         m.apply_transform(rot)
+    min_z = m.bounds[0][2]
+    if min_z != 0:
+        m.apply_translation([0, 0, -min_z])
     m.apply_translation(position_cm)
     return m
 
@@ -266,15 +297,15 @@ def build_placed_items(placed_furniture):
     placed_items = []
     for raw in placed_furniture:
         cfg = normalize_furniture_item(raw)
-        catalog = FURNITURE_CATALOG[cfg["name"]]
+        catalog = get_furniture_info(raw)
         scale_xyz = furniture_scale_xyz(
-            cfg["name"], cfg["width_cm"], cfg["depth_cm"], cfg["height_cm"]
+            cfg["name"],
+            cfg["width_cm"],
+            cfg["depth_cm"],
+            cfg["height_cm"],
+            cfg["is_custom"],
         )
-        position_3d = [
-            cfg["position"][0],
-            cfg["position"][1],
-            cfg["height_cm"] / 2,
-        ]
+        position_3d = [cfg["position"][0], cfg["position"][1], 0]
         mesh = apply_transform(
             catalog["factory"](),
             position_3d,
@@ -342,8 +373,9 @@ def furniture_option_label(index):
 
 
 def render_selected_furniture_summary(index):
-    item = normalize_furniture_item(st.session_state.placed_furniture[index])
-    color = FURNITURE_CATALOG[item["name"]]["color"]
+    raw = st.session_state.placed_furniture[index]
+    item = normalize_furniture_item(raw)
+    color = get_furniture_info(raw)["color"]
     st.markdown(
         f"""
         **選択中の家具:** {item['name']}  
@@ -379,7 +411,7 @@ def build_floor_plan_figure(placed_furniture, room_width_cm, room_depth_cm):
 
     for raw in placed_furniture:
         item = normalize_furniture_item(raw)
-        catalog = FURNITURE_CATALOG[item["name"]]
+        catalog = get_furniture_info(raw)
         x_m = cm_to_m(item["position"][0])
         y_m = cm_to_m(item["position"][1])
         w_m = cm_to_m(item["width_cm"])
@@ -524,7 +556,7 @@ def build_canvas_drawing(placed_furniture, room_width_cm, room_depth_cm):
 
     for index, raw in enumerate(placed_furniture):
         item = normalize_furniture_item(raw)
-        catalog = FURNITURE_CATALOG[item["name"]]
+        catalog = get_furniture_info(raw)
         defaults = catalog["default_cm"]
         scale_x = item["width_cm"] / defaults["width"]
         scale_y = item["depth_cm"] / defaults["depth"]
@@ -814,20 +846,41 @@ with tab_layout:
 
     # ── 1. 家具を選ぶ ───────────────────────────────────────────
     st.markdown("### 1. 家具を選ぶ")
-    st.caption("追加する家具の種類とサイズを選び、「この家具を追加」を押してください。")
-
-    furniture_name = st.selectbox(
-        "追加する家具の種類",
-        list(FURNITURE_CATALOG.keys()),
-        key="furniture_select",
+    add_mode = st.radio(
+        "追加方法",
+        ["カタログから選ぶ", "名前とサイズを手入力"],
+        horizontal=True,
+        key="furniture_add_mode",
     )
 
-    defaults = FURNITURE_CATALOG[furniture_name]["default_cm"]
-    add_color = FURNITURE_CATALOG[furniture_name]["color"]
+    if add_mode == "カタログから選ぶ":
+        st.caption("カタログから種類を選び、サイズを調整して追加できます。")
+        furniture_name = st.selectbox(
+            "追加する家具の種類",
+            list(FURNITURE_CATALOG.keys()),
+            key="furniture_select",
+        )
+        add_display_name = furniture_name
+        add_is_custom = False
+        defaults = FURNITURE_CATALOG[furniture_name]["default_cm"]
+        add_color = FURNITURE_CATALOG[furniture_name]["color"]
+        size_key_suffix = furniture_name
+    else:
+        st.caption("家具名とサイズ（横・奥行・高さ）を自由に入力して追加できます。")
+        add_display_name = st.text_input(
+            "家具名",
+            placeholder="例: 本棚、タンス、テレビ台",
+            key="custom_furniture_name",
+        )
+        add_is_custom = True
+        defaults = CUSTOM_FURNITURE_DEFAULT_CM
+        add_color = CUSTOM_FURNITURE_COLOR
+        size_key_suffix = "custom"
+
     st.markdown(
         f'<span style="display:inline-block;width:14px;height:14px;background:{add_color};'
         f'border:1px solid #333;margin-right:6px;"></span>'
-        f"**選択中の種類:** {furniture_name}",
+        f"**追加する家具:** {add_display_name or '（名前未入力）'}",
         unsafe_allow_html=True,
     )
 
@@ -838,7 +891,7 @@ with tab_layout:
         max_value=400,
         value=int(defaults["width"]),
         step=5,
-        key=f"add_furniture_width_{furniture_name}",
+        key=f"add_furniture_width_{size_key_suffix}",
     )
     add_depth_cm = size_c2.number_input(
         "縦（奥行）cm",
@@ -846,7 +899,7 @@ with tab_layout:
         max_value=400,
         value=int(defaults["depth"]),
         step=5,
-        key=f"add_furniture_depth_{furniture_name}",
+        key=f"add_furniture_depth_{size_key_suffix}",
     )
     add_height_cm = size_c3.number_input(
         "高さ cm",
@@ -854,24 +907,29 @@ with tab_layout:
         max_value=300,
         value=int(defaults["height"]),
         step=5,
-        key=f"add_furniture_height_{furniture_name}",
+        key=f"add_furniture_height_{size_key_suffix}",
     )
 
     bc1, bc2, bc3 = st.columns(3)
     if bc1.button("この家具を追加", type="primary", use_container_width=True):
-        count = len(st.session_state.placed_furniture)
-        st.session_state.placed_furniture.append(
-            {
-                "name": furniture_name,
+        name = add_display_name.strip() if add_is_custom else furniture_name
+        if add_is_custom and not name:
+            st.error("家具名を入力してください。")
+        else:
+            count = len(st.session_state.placed_furniture)
+            new_item = {
+                "name": name,
                 "position": new_furniture_position(count, rw, rd),
                 "rotation": 0,
                 "width_cm": float(add_width_cm),
                 "depth_cm": float(add_depth_cm),
                 "height_cm": float(add_height_cm),
             }
-        )
-        st.session_state.pending_move_index = count
-        st.rerun()
+            if add_is_custom:
+                new_item["is_custom"] = True
+            st.session_state.placed_furniture.append(new_item)
+            st.session_state.pending_move_index = count
+            st.rerun()
 
     if bc2.button("最後の家具を削除", use_container_width=True):
         if st.session_state.placed_furniture:

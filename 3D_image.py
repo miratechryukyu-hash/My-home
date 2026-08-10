@@ -537,7 +537,7 @@ with tab_layout:
     st.subheader("3Dプレビュー")
     room_mesh = create_room(rw, rd, rh)
     fig_layout = build_scene_figure(room_mesh, build_placed_items(st.session_state.placed_furniture))
-    st.plotly_chart(fig_layout, use_container_width=True)
+    st.plotly_chart(fig_layout, use_container_width=True, key="layout_3d_preview")
 
 # ── Tab 3: プレビューと共有 ───────────────────────────────────
 
@@ -559,10 +559,10 @@ with tab_share:
                 st.image(photo["data"], caption=photo["label"], use_container_width=True)
         with col_3d:
             st.markdown("**家具配置シミュレーション**")
-            st.plotly_chart(fig, use_container_width=True)
+            st.plotly_chart(fig, use_container_width=True, key="share_3d_with_photo")
     else:
         st.markdown("**家具配置シミュレーション**")
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, use_container_width=True, key="share_3d_only")
         st.info(
             "参考写真が未登録です。「1. 部屋の設定」で写真を記録すると、"
             "実際の部屋と3Dシミュレーションを並べて見せられます。"

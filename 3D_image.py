@@ -339,12 +339,34 @@ def init_session_state():
         st.session_state.room_photos = []
     if "placed_furniture" not in st.session_state:
         st.session_state.placed_furniture = []
+    if "canvas_version" not in st.session_state:
+        st.session_state.canvas_version = 0
+    if "last_canvas_room_size" not in st.session_state:
+        st.session_state.last_canvas_room_size = None
     if "room_size" not in st.session_state:
         st.session_state.room_size = ROOM_PRESETS["6畳（約 364 × 273 cm）"]
     elif st.session_state.room_size[0] < 50:
         st.session_state.room_size = tuple(v * 100 for v in st.session_state.room_size)
     if "room_preset" not in st.session_state:
         st.session_state.room_preset = "6畳（約 364 × 273 cm）"
+
+
+def bump_canvas_version():
+    st.session_state.canvas_version += 1
+
+
+def sync_canvas_to_session(canvas_json, room_width_cm, room_depth_cm):
+    """Canvas の内容を session_state に反映（空データで上書きしない）"""
+    parsed = parse_canvas_furniture(canvas_json, room_width_cm, room_depth_cm)
+    if parsed is None:
+        return
+
+    current = st.session_state.placed_furniture
+    if not parsed and current:
+        return
+
+    if json.dumps(parsed, ensure_ascii=False) != json.dumps(current, ensure_ascii=False):
+        st.session_state.placed_furniture = parsed
 
 
 init_session_state()
@@ -387,9 +409,13 @@ with tab_room:
 
     if selected_preset != st.session_state.room_preset:
         st.session_state.room_preset = selected_preset
+        bump_canvas_version()
 
     if selected_preset != "自分で入力（cm）":
-        st.session_state.room_size = ROOM_PRESETS[selected_preset]
+        new_size = ROOM_PRESETS[selected_preset]
+        if st.session_state.room_size != new_size:
+            bump_canvas_version()
+        st.session_state.room_size = new_size
         rw, rd, rh = st.session_state.room_size
         st.info(f"設定中: 幅 {rw} cm × 奥行 {rd} cm × 高さ {rh} cm")
     else:
@@ -415,7 +441,10 @@ with tab_room:
             value=int(st.session_state.room_size[2]),
             step=5,
         )
-        st.session_state.room_size = (room_width, room_depth, room_height)
+        new_size = (room_width, room_depth, room_height)
+        if st.session_state.room_size != new_size:
+            bump_canvas_version()
+        st.session_state.room_size = new_size
 
     st.divider()
     st.subheader("部屋の参考写真（任意）")
@@ -475,9 +504,17 @@ with tab_layout:
     )
 
     rw, rd, rh = st.session_state.room_size
+    if st.session_state.last_canvas_room_size != (rw, rd, rh):
+        bump_canvas_version()
+        st.session_state.last_canvas_room_size = (rw, rd, rh)
+
     px_per_cm, canvas_w, canvas_h = canvas_scale(rw, rd)
 
-    furniture_name = st.selectbox("追加する家具", list(FURNITURE_CATALOG.keys()))
+    furniture_name = st.selectbox(
+        "追加する家具",
+        list(FURNITURE_CATALOG.keys()),
+        key="furniture_select",
+    )
 
     bc1, bc2, bc3 = st.columns(3)
     if bc1.button("選択した家具を追加", type="primary", use_container_width=True):
@@ -489,15 +526,18 @@ with tab_layout:
                 "scale": 1.0,
             }
         )
+        bump_canvas_version()
         st.rerun()
 
     if bc2.button("最後の家具を削除", use_container_width=True):
         if st.session_state.placed_furniture:
             st.session_state.placed_furniture.pop()
+            bump_canvas_version()
             st.rerun()
 
     if bc3.button("すべてクリア", use_container_width=True):
         st.session_state.placed_furniture = []
+        bump_canvas_version()
         st.rerun()
 
     initial_drawing = build_canvas_drawing(st.session_state.placed_furniture, rw, rd)
@@ -511,16 +551,11 @@ with tab_layout:
         drawing_mode="transform",
         initial_drawing=initial_drawing,
         display_toolbar=False,
-        key="floor_plan_canvas",
+        key=f"floor_plan_canvas_v{st.session_state.canvas_version}",
     )
 
     if canvas_result.json_data is not None:
-        parsed = parse_canvas_furniture(canvas_result.json_data, rw, rd)
-        if parsed is not None:
-            serialized_current = json.dumps(st.session_state.placed_furniture, ensure_ascii=False)
-            serialized_parsed = json.dumps(parsed, ensure_ascii=False)
-            if serialized_parsed != serialized_current:
-                st.session_state.placed_furniture = parsed
+        sync_canvas_to_session(canvas_result.json_data, rw, rd)
 
     if st.session_state.placed_furniture:
         st.markdown("**配置済み家具**")

@@ -5,7 +5,6 @@ import trimesh
 
 st.set_page_config(
     page_title="自宅レイアウトイメージ",
-    page_icon="🏠",
     layout="wide",
     initial_sidebar_state="expanded",
 )
@@ -138,10 +137,9 @@ def build_scene_figure(room_mesh, placed_items, room_size):
             mesh_to_trace(item["mesh"], item["color"], item["name"], opacity=0.9)
         )
 
-    w, d, h = room_size
     fig = go.Figure(data=traces)
     fig.update_layout(
-        title="3Dレイアウトプレビュー",
+        title="家具配置シミュレーション（3D）",
         scene=dict(
             aspectmode="data",
             xaxis_title="幅 (m)",
@@ -155,79 +153,117 @@ def build_scene_figure(room_mesh, placed_items, room_size):
     return fig
 
 
+def init_session_state():
+    if "room_photos" not in st.session_state:
+        st.session_state.room_photos = []
+    if "placed_furniture" not in st.session_state:
+        st.session_state.placed_furniture = []
+    if "room_size" not in st.session_state:
+        st.session_state.room_size = (4.0, 3.5, 2.4)
+
+
+init_session_state()
+
 # ── UI ────────────────────────────────────────────────────────
 
-st.title("🏠 自宅レイアウトイメージ共有")
-st.caption(
-    "スマホで部屋を撮影 → 家具を配置 → イメージを共有するためのアプリです。"
+st.title("自宅レイアウトイメージ共有")
+st.markdown(
+    """
+**このアプリでできること（現在）**
+
+1. 部屋の大きさを入力して、簡易的な3D空間を作る
+2. サンプル家具（2段ベッドなど）をその空間に配置する
+3. 「実際の部屋の写真」と「家具配置の3Dイメージ」を並べて、家族や業者と共有する
+
+**写真について**
+
+写真を撮っても、今のバージョンでは3D空間は自動生成されません。
+写真は **「今の部屋の様子」** として保存され、共有画面に表示されます。
+3D空間は、下記の **部屋のサイズ入力** から作っています。
+"""
 )
 
-tab_capture, tab_layout, tab_share = st.tabs(
-    ["📷 1. 空間の記録", "🛋️ 2. 家具の配置", "📤 3. プレビューと共有"]
+tab_room, tab_layout, tab_share = st.tabs(
+    ["1. 部屋の設定", "2. 家具の配置", "3. プレビューと共有"]
 )
 
-# ── Tab 1: 空間の記録 ─────────────────────────────────────────
+# ── Tab 1: 部屋の設定 ─────────────────────────────────────────
 
-with tab_capture:
-    st.subheader("部屋の写真・動画を記録")
-    st.info(
-        "**現在のバージョン:** 撮影データは参考画像として保存します。"
-        "写真・動画から自動で3D空間を復元する機能は今後追加予定です。"
-        "その間は、部屋のサイズを入力して簡易3D空間を作成します。"
+with tab_room:
+    st.subheader("部屋のサイズ")
+    st.caption("3D空間は、この数値から作成されます。メジャーで測れない場合はおおよそで構いません。")
+
+    c1, c2, c3 = st.columns(3)
+    room_width = c1.number_input(
+        "幅 (m)", min_value=2.0, max_value=15.0,
+        value=st.session_state.room_size[0], step=0.5,
+    )
+    room_depth = c2.number_input(
+        "奥行 (m)", min_value=2.0, max_value=15.0,
+        value=st.session_state.room_size[1], step=0.5,
+    )
+    room_height = c3.number_input(
+        "高さ (m)", min_value=2.0, max_value=4.0,
+        value=st.session_state.room_size[2], step=0.1,
+    )
+    st.session_state.room_size = (room_width, room_depth, room_height)
+
+    st.divider()
+    st.subheader("部屋の参考写真（任意）")
+    st.markdown(
+        """
+        共有するときに **「今の部屋」** として一緒に見せるための写真です。
+        3D空間の形には影響しません。撮らなくても、家具配置のシミュレーションは使えます。
+        """
     )
 
     col_cam, col_upload = st.columns(2)
 
     with col_cam:
         st.markdown("**カメラで撮影**（スマホブラウザ対応）")
-        camera_photo = st.camera_input("部屋の写真を撮る")
+        camera_photo = st.camera_input("部屋の写真", label_visibility="collapsed")
 
     with col_upload:
         st.markdown("**ファイルからアップロード**")
-        photos = st.file_uploader(
+        uploaded_photos = st.file_uploader(
             "写真（複数可）",
             type=["jpg", "jpeg", "png", "heic"],
             accept_multiple_files=True,
-        )
-        video = st.file_uploader(
-            "動画（1本）",
-            type=["mp4", "mov", "webm"],
+            label_visibility="collapsed",
         )
 
-    captured = []
+    pending = []
     if camera_photo is not None:
-        captured.append(("カメラ撮影", camera_photo))
-    if photos:
-        for p in photos:
-            captured.append((p.name, p))
+        pending.append({"label": "カメラ撮影", "data": camera_photo.getvalue()})
+    if uploaded_photos:
+        for photo in uploaded_photos:
+            pending.append({"label": photo.name, "data": photo.getvalue()})
 
-    if captured:
-        st.success(f"{len(captured)} 枚の写真を記録しました")
-        cols = st.columns(min(len(captured), 4))
-        for i, (label, img) in enumerate(captured):
-            cols[i % len(cols)].image(img, caption=label, use_container_width=True)
+    bc1, bc2 = st.columns(2)
+    if bc1.button("写真を記録する", type="primary", disabled=not pending):
+        st.session_state.room_photos = pending
+        st.rerun()
 
-    if video is not None:
-        st.success(f"動画を記録しました: {video.name}")
-        st.video(video)
-        st.caption("動画からの3D復元は準備中です。現時点では参考資料として保存されます。")
+    if bc2.button("記録した写真をすべて削除", disabled=not st.session_state.room_photos):
+        st.session_state.room_photos = []
+        st.rerun()
 
-    st.divider()
-    st.subheader("部屋のサイズ（おおよそ）")
-    c1, c2, c3 = st.columns(3)
-    room_width = c1.number_input("幅 (m)", min_value=2.0, max_value=15.0, value=4.0, step=0.5)
-    room_depth = c2.number_input("奥行 (m)", min_value=2.0, max_value=15.0, value=3.5, step=0.5)
-    room_height = c3.number_input("高さ (m)", min_value=2.0, max_value=4.0, value=2.4, step=0.1)
-
-    st.session_state["room_size"] = (room_width, room_depth, room_height)
+    if st.session_state.room_photos:
+        st.success(f"{len(st.session_state.room_photos)} 枚の参考写真を記録中")
+        cols = st.columns(min(len(st.session_state.room_photos), 4))
+        for i, photo in enumerate(st.session_state.room_photos):
+            cols[i % len(cols)].image(
+                photo["data"], caption=photo["label"], use_container_width=True
+            )
+    else:
+        st.caption("参考写真はまだ記録されていません。")
 
 # ── Tab 2: 家具の配置 ─────────────────────────────────────────
 
 with tab_layout:
     st.subheader("サンプル家具を部屋に配置")
 
-    room_size = st.session_state.get("room_size", (4.0, 3.5, 2.4))
-    rw, rd, rh = room_size
+    rw, rd, rh = st.session_state.room_size
 
     col_sel, col_ctrl = st.columns([1, 2])
 
@@ -245,9 +281,6 @@ with tab_layout:
         pos_y = c2.slider("前後 (m)", -rd / 2 + 0.5, rd / 2 - 0.5, 0.0, 0.1)
         rotation = c3.slider("回転 (°)", 0, 360, 0, 15)
         scale = c4.slider("サイズ", 0.5, 2.0, 1.0, 0.1)
-
-    if "placed_furniture" not in st.session_state:
-        st.session_state.placed_furniture = []
 
     bc1, bc2, bc3 = st.columns(3)
     if bc1.button("この家具を追加", type="primary", use_container_width=True):
@@ -282,13 +315,15 @@ with tab_layout:
 # ── Tab 3: プレビューと共有 ───────────────────────────────────
 
 with tab_share:
-    st.subheader("3Dレイアウトのプレビュー")
+    st.subheader("プレビュー")
+    st.caption(
+        "左（または上）が実際の部屋の写真、右（または下）が家具を配置した3Dシミュレーションです。"
+    )
 
-    room_size = st.session_state.get("room_size", (4.0, 3.5, 2.4))
-    room_mesh = create_room(*room_size)
+    room_mesh = create_room(*st.session_state.room_size)
 
     placed_items = []
-    for cfg in st.session_state.get("placed_furniture", []):
+    for cfg in st.session_state.placed_furniture:
         catalog = FURNITURE_CATALOG[cfg["name"]]
         mesh = apply_transform(
             catalog["factory"](),
@@ -300,19 +335,36 @@ with tab_share:
             {"mesh": mesh, "color": catalog["color"], "name": cfg["name"]}
         )
 
-    fig = build_scene_figure(room_mesh, placed_items, room_size)
-    st.plotly_chart(fig, use_container_width=True)
+    fig = build_scene_figure(room_mesh, placed_items, st.session_state.room_size)
+
+    if st.session_state.room_photos:
+        col_photo, col_3d = st.columns(2)
+        with col_photo:
+            st.markdown("**実際の部屋**")
+            for photo in st.session_state.room_photos:
+                st.image(photo["data"], caption=photo["label"], use_container_width=True)
+        with col_3d:
+            st.markdown("**家具配置シミュレーション**")
+            st.plotly_chart(fig, use_container_width=True)
+    else:
+        st.markdown("**家具配置シミュレーション**")
+        st.plotly_chart(fig, use_container_width=True)
+        st.info(
+            "参考写真が未登録です。「1. 部屋の設定」で写真を記録すると、"
+            "実際の部屋と3Dシミュレーションを並べて見せられます。"
+        )
 
     st.divider()
     st.subheader("イメージを共有")
     st.markdown(
-        "下のボタンで画像を保存し、LINE・メールなどで家族や業者と共有できます。"
+        "3Dシミュレーションを画像として保存し、LINE・メールなどで共有できます。"
+        "参考写真は、端末の写真アプリから別途送るか、画面のスクリーンショットをご利用ください。"
     )
 
     try:
         img_bytes = fig.to_image(format="png", width=1200, height=800, scale=2)
         st.download_button(
-            label="📥 レイアウト画像をダウンロード（PNG）",
+            label="レイアウト画像をダウンロード（PNG）",
             data=img_bytes,
             file_name="home_layout.png",
             mime="image/png",
@@ -329,9 +381,9 @@ with tab_share:
     with st.expander("今後追加予定の機能"):
         st.markdown(
             """
-            - 📸 **写真・動画からの3D空間復元**（フォトグラメトリ）
-            - 🪑 **より多くの家具カタログ**（カスタムモデルの読み込み）
-            - 📐 **壁・窓の自動検出**
-            - 🔗 **共有リンクの生成**
+            - 写真・動画からの3D空間の自動復元（フォトグラメトリ）
+            - より多くの家具カタログ（カスタムモデルの読み込み）
+            - 壁・窓の自動検出
+            - 共有リンクの生成
             """
         )
